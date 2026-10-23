@@ -28,8 +28,7 @@ unavailable/empty hostname falls back to `btfling`.
 
 Explicit help commands do not create configuration. Invalid/unreadable existing
 files are errors, not reasons to overwrite them. Existing device IDs and keys are
-preserved. Legacy configurations without a local key acquire one on operational
-startup; legacy peers without keys remain unusable for transfers until re-paired.
+preserved. Configuration requires a private key and a public key for every saved peer.
 
 Use `btfling init NAME` before automatic setup to choose an initial name. It refuses
 an existing configuration. Change the local name later in the TUI's Client tab
@@ -37,7 +36,7 @@ an existing configuration. Change the local name later in the TUI's Client tab
 
 ## Schema
 
-Configuration version remains `1`; it is separate from wire protocol version 2.
+The configuration schema version is `1`.
 A structural example, omitting key fields for readability:
 
 ```yaml
@@ -49,24 +48,24 @@ peers:
     id: fedcba9876543210fedcba9876543210
 ```
 
-Actual newly generated configurations also contain `private_key`; paired peers
-contain `public_key`. Let btfling generate the IDs and key material rather than
-copying these example IDs.
+A valid configuration also requires `private_key` and each peer's `public_key`.
+The abbreviated example above is for reference. Let btfling generate the IDs and
+key material rather than copying these example IDs.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `version` | Integer | Exactly `1`. |
 | `name` | String | This device's name, used in discovery and hello. |
 | `id` | String | Stable 16-byte random application ID, as 32 hexadecimal characters. |
-| `private_key` | Byte sequence | Local 32-byte Ed25519 private seed. Generated automatically if absent. |
+| `private_key` | Byte sequence | Required local 32-byte Ed25519 private seed, generated during initialization. |
 | `peers` | Optional sequence | Saved remote identity/trust records. |
 | `peers[].name` | String | Local alias learned from the remote name, optionally overridden. |
 | `peers[].id` | String | Stable remote 32-hex-character application ID. |
-| `peers[].public_key` | Byte sequence | The trusted remote 32-byte Ed25519 public key. Legacy records may lack it. |
+| `peers[].public_key` | Byte sequence | Required trusted remote 32-byte Ed25519 public key, saved during pairing. |
 
 Key bytes are numeric YAML sequences, not PEM or base64 strings. Public keys use
 base64 in JSON on the Bluetooth wire; the on-disk encoding differs. The serializer
-omits empty peer lists and absent legacy keys. Unknown YAML fields are rejected.
+omits empty peer lists. Unknown YAML fields are rejected.
 
 The local public key is derived from the private seed and is not separately stored.
 TLS certificates are generated in memory per session and are not persisted.
@@ -75,7 +74,7 @@ Fingerprints from `keygen` and `peers` are lowercase hexadecimal SHA-256 of the 
 
 Names are case-sensitive, nonempty, no more than 64 UTF-8 bytes, and contain no
 leading/trailing whitespace, control characters, `/`, or `\`. Peer names and IDs
-must be unique; a peer ID cannot equal the local ID. Present keys must have 32 bytes.
+must be unique; a peer ID cannot equal the local ID. Keys must have 32 bytes.
 
 ## Trust lifecycle
 
@@ -86,14 +85,13 @@ btfling rename alice personal-laptop
 btfling forget personal-laptop
 ```
 
-`keygen` prints the local fingerprint and preserves an existing key. Every transfer
-requires saved keys and mutual TLS. There is no plaintext override.
+`keygen` prints the local public-key fingerprint without changing the key.
+Transfers authenticate saved peer keys through mutual TLS.
 
 Pairing learns the remote client name unless `-as NAME` overrides it. The TUI has
 an optional alias field. Re-pairing a known ID with the same key is idempotent and
-preserves its local alias unless explicitly overridden. An old identity-only
-record can acquire a key through re-pairing. Name collisions across different IDs
-require a unique alias.
+preserves its local alias unless explicitly overridden. Name collisions across
+different IDs require a unique alias.
 
 A changed saved key is rejected, including during pairing. To intentionally replace
 trust, forget and pair again on both devices, preferably with verified fingerprints.

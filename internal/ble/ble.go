@@ -45,7 +45,7 @@ type helper struct {
 
 func start(ctx context.Context, mode, id, name string) (*helper, error) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
-		return nil, errors.New("Bluetooth backend requires macOS or Windows; Termux needs an Android companion app (see README)")
+		return nil, errors.New("Bluetooth is supported on macOS and Windows")
 	}
 	executable, e := os.Executable()
 	if e != nil {

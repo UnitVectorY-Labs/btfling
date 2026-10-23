@@ -18,13 +18,13 @@ import (
 type Peer struct {
 	Name      string `yaml:"name" json:"name"`
 	ID        string `yaml:"id" json:"id"`
-	PublicKey []byte `yaml:"public_key,omitempty" json:"public_key,omitempty"`
+	PublicKey []byte `yaml:"public_key" json:"public_key"`
 }
 type Config struct {
 	Version    int    `yaml:"version"`
 	Name       string `yaml:"name"`
 	ID         string `yaml:"id"`
-	PrivateKey []byte `yaml:"private_key,omitempty"`
+	PrivateKey []byte `yaml:"private_key"`
 	Peers      []Peer `yaml:"peers,omitempty"`
 }
 
@@ -50,13 +50,13 @@ func (c *Config) Validate() error {
 	if b, e := hex.DecodeString(c.ID); e != nil || len(b) != 16 {
 		return errors.New("invalid local device ID")
 	}
-	if len(c.PrivateKey) != 0 && len(c.PrivateKey) != ed25519.SeedSize {
+	if len(c.PrivateKey) != ed25519.SeedSize {
 		return errors.New("invalid private key seed")
 	}
 	names, ids := map[string]bool{}, map[string]bool{}
 	for _, p := range c.Peers {
 		b, e := hex.DecodeString(p.ID)
-		if !ValidName(p.Name) || e != nil || len(b) != 16 || p.ID == c.ID || names[p.Name] || ids[p.ID] || (len(p.PublicKey) != 0 && len(p.PublicKey) != ed25519.PublicKeySize) {
+		if !ValidName(p.Name) || e != nil || len(b) != 16 || p.ID == c.ID || names[p.Name] || ids[p.ID] || len(p.PublicKey) != ed25519.PublicKeySize {
 			return errors.New("invalid or duplicate peer")
 		}
 		names[p.Name] = true

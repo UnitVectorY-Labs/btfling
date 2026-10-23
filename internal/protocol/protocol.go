@@ -24,7 +24,7 @@ import (
 )
 
 const maxFrame = 32769
-const Version = 2
+const Version = 1
 
 func WriteFrame(w io.Writer, p []byte) error {
 	if len(p) > maxFrame {
@@ -69,26 +69,24 @@ type hello struct {
 	Version   int    `json:"version"`
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	PublicKey []byte `json:"public_key,omitempty"`
+	PublicKey []byte `json:"public_key"`
 	Operation string `json:"operation"`
-	Encrypted bool   `json:"encrypted"`
 }
 type Session struct {
 	io.ReadWriter
 	Remote config.Peer
 }
 
-// Open checks device identity, operation, and encryption mode before accepting payload.
+// Open verifies device identity and establishes mutually authenticated TLS.
 // Pairing is an explicit trust-on-first-use exchange; callers must verify the returned key.
 func Open(ctx context.Context, rw io.ReadWriteCloser, c *config.Config, expected *config.Peer, initiator bool, operation string) (*Session, error) {
-	encrypted := true
 	if operation == "send" && (expected == nil || len(expected.PublicKey) != ed25519.PublicKeySize) {
-		return nil, errors.New("peer has no encryption key; pair again before transferring")
+		return nil, errors.New("invalid trusted peer public key")
 	}
-	if encrypted && len(c.PrivateKey) == 0 {
-		return nil, errors.New("trusted peer requires encryption; local private key is missing")
+	if len(c.PrivateKey) != ed25519.SeedSize {
+		return nil, errors.New("invalid local private key seed")
 	}
-	local := hello{Version, c.ID, c.Name, c.PublicKey(), operation, encrypted}
+	local := hello{Version: Version, ID: c.ID, Name: c.Name, PublicKey: c.PublicKey(), Operation: operation}
 
 	send := func() error {
 		b, e := json.Marshal(local)
@@ -111,7 +109,7 @@ func Open(ctx context.Context, rw io.ReadWriteCloser, c *config.Config, expected
 			return errors.New("invalid peer device ID")
 		}
 		if remote.Version != Version {
-			return errors.New("btfling protocol version mismatch; update both devices and their native helpers")
+			return errors.New("unsupported btfling protocol version")
 		}
 		if !config.ValidName(remote.Name) || len(remote.ID) != 32 || remote.ID == c.ID {
 			return errors.New("invalid btfling identity")
@@ -124,9 +122,6 @@ func Open(ctx context.Context, rw io.ReadWriteCloser, c *config.Config, expected
 		}
 		if remote.Operation != operation {
 			return errors.New("peer is waiting for a different operation")
-		}
-		if remote.Encrypted != encrypted {
-			return errors.New("encryption mode mismatch; both devices must agree (no automatic downgrade)")
 		}
 		return nil
 	}
@@ -146,43 +141,41 @@ func Open(ctx context.Context, rw io.ReadWriteCloser, c *config.Config, expected
 		}
 	}
 	s := &Session{ReadWriter: rw, Remote: config.Peer{ID: remote.ID, Name: remote.Name, PublicKey: remote.PublicKey}}
-	if encrypted {
-		pinned := remote.PublicKey
-		if expected != nil {
-			pinned = expected.PublicKey
-		}
-		if !bytes.Equal(remote.PublicKey, pinned) {
-			return nil, errors.New("peer public key changed")
-		}
-		cert, e := certificate(c.PrivateKey)
-		if e != nil {
-			return nil, e
-		}
-		tc := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}, SessionTicketsDisabled: true,
-			// A pinned Ed25519 public key replaces public PKI and DNS verification.
-			InsecureSkipVerify: true, ClientAuth: tls.RequireAnyClientCert,
-			VerifyConnection: func(state tls.ConnectionState) error {
-				if len(state.PeerCertificates) != 1 {
-					return errors.New("expected one pinned peer certificate")
-				}
-				pub, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-				if !ok || !bytes.Equal(pub, pinned) {
-					return errors.New("TLS peer key does not match trusted key")
-				}
-				return nil
-			}}
-		conn := &bluetoothConn{ReadWriteCloser: rw}
-		var secure *tls.Conn
-		if initiator {
-			secure = tls.Client(conn, tc)
-		} else {
-			secure = tls.Server(conn, tc)
-		}
-		if e = secure.HandshakeContext(ctx); e != nil {
-			return nil, fmt.Errorf("Bluetooth TLS handshake: %w", e)
-		}
-		s.ReadWriter = secure
+	pinned := remote.PublicKey
+	if expected != nil {
+		pinned = expected.PublicKey
 	}
+	if !bytes.Equal(remote.PublicKey, pinned) {
+		return nil, errors.New("peer public key changed")
+	}
+	cert, e := certificate(c.PrivateKey)
+	if e != nil {
+		return nil, e
+	}
+	tc := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}, SessionTicketsDisabled: true,
+		// A pinned Ed25519 public key replaces public PKI and DNS verification.
+		InsecureSkipVerify: true, ClientAuth: tls.RequireAnyClientCert,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) != 1 {
+				return errors.New("expected one pinned peer certificate")
+			}
+			pub, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+			if !ok || !bytes.Equal(pub, pinned) {
+				return errors.New("TLS peer key does not match trusted key")
+			}
+			return nil
+		}}
+	conn := &bluetoothConn{ReadWriteCloser: rw}
+	var secure *tls.Conn
+	if initiator {
+		secure = tls.Client(conn, tc)
+	} else {
+		secure = tls.Server(conn, tc)
+	}
+	if e = secure.HandshakeContext(ctx); e != nil {
+		return nil, fmt.Errorf("Bluetooth TLS handshake: %w", e)
+	}
+	s.ReadWriter = secure
 	return s, nil
 }
 func certificate(seed []byte) (tls.Certificate, error) {

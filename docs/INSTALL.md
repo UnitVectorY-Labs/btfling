@@ -34,15 +34,11 @@ Windows helper is self-contained; target machines do not need .NET. Build-time
 package restore may download dependencies; runtime transfer uses only Bluetooth.
 `go install .` does not install the helper.
 
-The locally built Windows x64 command may be named `windows.exe`; run it as
-`.\windows.exe` or rename it to `btfling.exe`. Keep `btfling-ble.exe` beside it.
-Generated binaries are not committed to Git.
-
 Cross-build Windows x64 from macOS:
 
 ```sh
-GOOS=windows GOARCH=amd64 go build -o windows.exe .
-go run ./internal/buildhelper -os windows -arch amd64 -out .
+GOOS=windows GOARCH=amd64 go build -o dist/btfling.exe .
+go run ./internal/buildhelper -os windows -arch amd64 -out dist
 ```
 
 Use `GOARCH=arm64` and `-arch arm64` for Windows ARM64. Build the macOS helper on
@@ -71,5 +67,5 @@ working-directory helpers. An explicit override is supported:
 BTFLING_BLE_HELPER="$PWD/dist/btfling-ble" go run . pair
 ```
 
-Rebuild the native helpers on both devices when updating pairing functionality.
+Keep the command and helper from the same build together.
 

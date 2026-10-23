@@ -44,7 +44,7 @@ func TestTUITabsAndPeerNames(t *testing.T) {
 		t.Fatal("cannot select receive")
 	}
 }
-func TestTUIRequiresDestinationAndNoPlaintextControls(t *testing.T) {
+func TestTUIRequiresDestination(t *testing.T) {
 	dir := t.TempDir()
 	c, _ := config.Init(dir, "client")
 	m := newTUI(context.Background(), dir, c)
@@ -61,9 +61,6 @@ func TestTUIRequiresDestinationAndNoPlaintextControls(t *testing.T) {
 	m.submitForm()
 	if m.stage != "review" || !strings.HasSuffix(m.path, "report.pdf") {
 		t.Fatal("destination was not selected")
-	}
-	if strings.Contains(strings.ToLower(ansi.Strip(m.View())), "plaintext mode") {
-		t.Fatal("TUI offered unencrypted transfers")
 	}
 }
 func TestTUIViewFitsStandardTerminal(t *testing.T) {

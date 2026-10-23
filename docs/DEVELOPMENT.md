@@ -45,15 +45,12 @@ gitrepoforge validate --repo btfling
 The workspace `.gitrepoforge-config` supplies the template repository path and
 named actions. Its `stage` action writes files without committing or pushing.
 
-The project uses `status: wip` until physical interoperability is verified.
-`release: build-go` enables Go build/test CI. The standard `release-go` template
-publishes standalone Go binaries for platforms that btfling does not fully
-support and omits the required native helper. Releases need platform-specific
-packaging of both executables before enabling automated publication.
+`release: build-go` enables Go build/test CI. Release publishing is not configured.
+A distributable application consists of the Go executable and its platform's
+native BLE helper in the same directory.
 
-The Go template version is explicitly set to `1.26.0` to preserve the existing
-minimum version. Update `config.versions.go` when changing it so regeneration
-keeps go.mod and the generated workflows consistent.
+Set `config.versions.go` in `.gitrepoforge` to keep the Go version consistent
+across go.mod and the generated workflows.
 
 ## Documentation
 
@@ -66,7 +63,6 @@ changing commands, configuration, or protocol behavior.
 `http://127.0.0.1:4000`. It requires Ruby and Bundler; local dependencies and site
 output are ignored by Git.
 
-The generated site configuration uses `btfling.unitvectorylabs.com`, following
-the sibling projects' domain convention. Publishing requires GitHub Pages to use
-the `main` branch's `/docs` directory and the custom domain's DNS to be configured.
-Repository files alone do not activate hosting or DNS.
+The site configuration specifies `btfling.unitvectorylabs.com`. To publish it,
+configure GitHub Pages to use the `main` branch's `/docs` directory and configure
+the custom domain's DNS.

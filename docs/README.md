@@ -26,9 +26,8 @@ with a btfling ASCII header, orange accents, blue Bluetooth activity indicators,
 file browsing, and progress. Headless commands remain available for pipelines and
 scripts.
 
-Native Bluetooth adapters are implemented for macOS and Windows. This initial
-version still needs physical two-device interoperability testing. Termux Bluetooth
-is not yet implemented.
+Native Bluetooth adapters are implemented for macOS and Windows. Physical
+two-device interoperability has not been verified on real adapters.
 
 ## Execution flow
 

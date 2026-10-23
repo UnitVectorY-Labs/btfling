@@ -19,9 +19,8 @@ btfling COMMAND [ARGUMENTS] [FLAGS]
 The default configuration is `~/.config/btfling/config.yaml` on every platform,
 including Windows. Missing configuration is created automatically with a
 hostname-based nickname, random stable device ID, and Ed25519 key. Existing
-identities, keys, and peers are preserved. Legacy configurations without a local
-key acquire one automatically. Invalid/unreadable files cause an error rather
-than being replaced. Initialization notices go to stderr.
+identities, keys, and peers are preserved. Invalid/unreadable files cause an error
+rather than being replaced. Initialization notices go to stderr.
 
 Running `btfling` with no arguments initializes configuration and displays help.
 `help`, `--help`, and `-h` display help without creating configuration. To choose
@@ -41,7 +40,7 @@ btfling --config /private/profile pair
 | Command | Purpose |
 | --- | --- |
 | `init NAME` | Create an identity/key with an explicit local name. |
-| `keygen` | Ensure a local key exists and print its fingerprint; never rotate an existing key. |
+| `keygen` | Print the local public-key fingerprint. |
 | `pair [ID] [flags]` | Advertise and discover, exchange keys, and save the other device. |
 | `discover [-timeout 10s]` | Scan for advertising peers and print their IDs/names. This diagnostic command only scans. |
 | `peers` | Print saved local aliases, device IDs, and public-key fingerprints. |
@@ -82,13 +81,8 @@ a signature or a certificate fingerprint.
 
 Pairing an already known ID with the same key preserves its alias and avoids
 duplicate records. `-as` can change the alias. A changed known key is rejected;
-forget the relationship explicitly before replacing trust. Legacy identity-only
-peers can gain keys by pairing again. Name collisions across different IDs require
-an alias override.
-
-For compatibility, old `-listen` and `-trust-new` flags are accepted, but neither
-is necessary: pairing always advertises/scans, and first-use trust is the default.
-There is no separate listener option in the TUI. `-plain` is no longer supported.
+forget the relationship explicitly before replacing trust. Name collisions across
+different IDs require an alias override.
 
 `discover` prints `DEVICE_ID<TAB>NAME` once per ID. Pair-mode devices and waiting
 receivers advertise; idle installations do not. Scan before a transfer rather than
@@ -104,8 +98,7 @@ btfling receive NAME [-out FILE] [-timeout DURATION]
 
 Use a saved peer alias. The receiver advertises; the sender scans and connects.
 Either may start first. **All transfers use mutual TLS 1.3 and pinned peer keys.**
-A legacy peer without a saved public key must pair again. Changed/missing keys or
-an unencrypted hello cause failure; there is no downgrade or plaintext flag.
+The connection must authenticate the saved peer key before transferring data.
 
 `send` reads stdin until EOF unless `-in FILE` is supplied. `receive` writes payload
 bytes to stdout unless `-out FILE` is supplied. Status/diagnostics go to stderr;
@@ -164,13 +157,12 @@ adapter. The TUI requires explicit files; use CLI commands for stdin/stdout stre
 | `130` | Interrupted through the CLI signal context. |
 
 If no devices appear, open Pair on the other device, verify Bluetooth permissions,
-and check peripheral/concurrent-role adapter support. Both application and native
-helper must be updated together. Missing-helper errors mean the companion executable
-is absent or incorrectly located. A trusted-key error requires inspecting the
-relationship, not disabling encryption.
+and check peripheral/concurrent-role adapter support. Keep the application and native
+helper from the same build together. Missing-helper errors mean the helper executable
+is absent or incorrectly located. For a trusted-key error, verify the device
+fingerprint and inspect the saved peer relationship.
 
-Termux Bluetooth requires an unimplemented Android companion APK. Unsupported
-platforms fail explicitly without switching transports.
+Bluetooth operations require macOS or Windows.
 
 ## Development
 

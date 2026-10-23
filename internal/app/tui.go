@@ -250,9 +250,6 @@ func (m *tui) refreshLists() {
 	saved := make([]list.Item, 0, len(m.c.Peers))
 	for _, p := range m.c.Peers {
 		label := "Encrypted · " + p.ID
-		if len(p.PublicKey) != 32 {
-			label = "Pair again to exchange encryption keys"
-		}
 		saved = append(saved, peerItem{peer: p, description: label})
 	}
 	m.saved.SetItems(saved)
@@ -506,10 +503,6 @@ func (m tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = "Pair a device first"
 						return m, nil
 					}
-					if len(p.peer.PublicKey) != 32 {
-						m.status = "Pair this device again to exchange keys"
-						return m, nil
-					}
 					m.selected = p.peer
 					m.stage = "file"
 					m.picker.DirAllowed = m.direction == "receive"
@@ -573,7 +566,7 @@ func (m tui) View() string {
 	} else {
 		switch m.tab {
 		case 0:
-			body.WriteString(accent.Render("YOUR CLIENT") + "\n\n" + lipgloss.NewStyle().Bold(true).Render(m.c.Name) + "\n" + subtle.Render(m.c.ID) + "\n\n" + accent.Render("ENCRYPTION IS ALWAYS ON") + "\n" + "Mutual TLS 1.3 · Ed25519 identity · X25519 session keys\n\n" + subtle.Render("Your public-key fingerprint") + "\n" + config.Fingerprint(m.c.PublicKey()) + "\n\n" + fmt.Sprintf("%d paired devices", len(m.c.Peers)) + "\n" + subtle.Render(m.dir) + "\n\n" + "n  Edit client name\nTab  Discover and pair a nearby device")
+			body.WriteString(accent.Render("YOUR CLIENT") + "\n\n" + lipgloss.NewStyle().Bold(true).Render(m.c.Name) + "\n" + subtle.Render(m.c.ID) + "\n\n" + accent.Render("SECURE CONNECTIONS") + "\n" + "Mutual TLS 1.3 · Ed25519 identity · X25519 session keys\n\n" + subtle.Render("Your public-key fingerprint") + "\n" + config.Fingerprint(m.c.PublicKey()) + "\n\n" + fmt.Sprintf("%d paired devices", len(m.c.Peers)) + "\n" + subtle.Render(m.dir) + "\n\n" + "n  Edit client name\nTab  Discover and pair a nearby device")
 			if len(m.c.Peers) > 0 {
 				body.WriteString("\n\n" + accent.Render("PAIRED DEVICES"))
 				for _, p := range m.c.Peers {

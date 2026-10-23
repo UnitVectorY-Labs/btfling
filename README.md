@@ -5,19 +5,18 @@
 Send files and binary streams between nearby computers over encrypted Bluetooth.
 
 Pair once, remember the other device by name, and transfer from a terminal or
-shell pipeline. Payloads travel exclusively over Bluetooth—no Wi-Fi, accounts, Internet
-relays, or cloud storage.
+shell pipeline. Payloads travel exclusively over Bluetooth—no Wi-Fi, accounts,
+Internet relays, or cloud storage.
 
-- **One Pair mode:** both devices advertise and discover each other. Names are learned automatically.
-- **Always encrypted:** mutual TLS 1.3 authenticates saved Ed25519 keys and uses ephemeral X25519 session keys.
-- **A terminal you can navigate:** an orange-accented Bubble Tea / Lip Gloss interface with Client, Pair, and Transfer tabs, blue Bluetooth indicators, file browsing, and progress.
+- **Device pairing:** both devices advertise and discover each other. Names are learned automatically.
+- **Encrypted transfers:** mutual TLS 1.3 authenticates saved Ed25519 keys and uses ephemeral X25519 session keys.
+- **Terminal interface:** Client, Pair, and Transfer tabs with device selection, file browsing, and progress.
 - **Scriptable:** stdin/stdout, explicit files, useful exit codes, and diagnostics on stderr.
 - **Automatic setup:** first run creates a local identity and key under `~/.config/btfling/`.
 
-Native BLE adapters are implemented for **macOS and Windows**. This is an initial
-implementation: physical two-device interoperability, including concurrent
-advertising/scanning, still needs verification on real adapters. BLE's conservative
-transport favors compatibility over speed. Termux Bluetooth is not implemented.
+Native BLE adapters are implemented for **macOS and Windows**. Physical two-device
+interoperability, including concurrent advertising/scanning, has not been verified
+on real adapters. BLE throughput is limited by the acknowledged GATT transport.
 
 ## Quick Start
 
@@ -51,7 +50,7 @@ Both advertise and scan; the CLI selects the first nearby peer in pairing mode.
 Use the Pair tab to choose from a list, or `btfling pair DEVICE_ID` to target one.
 Pairing uses first-use trust by default. Compare key fingerprints through a trusted
 channel, or supply `-trust FINGERPRINT` to require a known fingerprint before saving.
-Every subsequent transfer verifies the saved key; plaintext transfers are disabled.
+Transfers authenticate the saved peer key.
 
 For devices saved locally as `alice` and `bob`:
 
@@ -82,7 +81,7 @@ go build ./...
 ```
 
 Tests include simultaneous mutual pairing, learned names, optional fingerprint
-verification, key pinning, mandatory encryption, binary pipelines, destination
+verification, key pinning, TLS sessions, binary pipelines, destination
 cleanup, TLS tampering, cancellation, and minimum-MTU GATT mailboxes. See the
 [physical-device checklist](docs/PROTOCOL.md#physical-device-testing) for the
 remaining radio/OS acceptance tests.

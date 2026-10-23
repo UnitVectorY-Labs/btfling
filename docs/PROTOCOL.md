@@ -7,10 +7,9 @@ permalink: /protocol
 
 # Protocol and security
 
-This describes wire protocol **version 2**, with mandatory encryption and mutual
-pairing discovery. Both applications and native helpers must be updated together.
-Configuration schema version remains 1. Physical two-device interoperability is
-still unverified; this document is not an independent security audit.
+btfling uses wire protocol **version 1** with mutually authenticated TLS 1.3 over
+Bluetooth GATT. Physical two-device interoperability has not been verified on
+real adapters.
 
 ## Stack and Bluetooth roles
 
@@ -36,7 +35,7 @@ is used by TLS without opening a socket.
 Native implementations are Swift/CoreBluetooth and C#/WinRT. GATT attributes permit
 unpaired access; btfling authenticates the encrypted application session above
 Bluetooth. Pairing requires adapters/drivers capable of peripheral advertising and
-central scanning concurrently. Termux needs an unimplemented Android companion APK.
+central scanning concurrently.
 
 ## GATT discovery and stream characteristics
 
@@ -99,24 +98,21 @@ it and responds. Representative structure (public key is a placeholder):
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "id": "0123456789abcdef0123456789abcdef",
   "name": "office-laptop",
   "public_key": "BASE64_OF_32_BYTE_ED25519_PUBLIC_KEY",
-  "operation": "pair",
-  "encrypted": true
+  "operation": "pair"
 }
 ```
 
-`operation` is `pair` for setup and `send` at both transfer endpoints. Version 2,
-valid nonlocal ID/name, a 32-byte offered public key, expected operation, and
-`encrypted: true` are required. Transfers also compare the saved peer ID and key.
-A peer without a saved key cannot transfer. There is no plaintext branch.
+`operation` is `pair` for setup and `send` at both transfer endpoints. Version 1,
+a valid nonlocal ID/name, a 32-byte offered public key, and the expected operation
+are required. Transfers also compare the saved peer ID and key.
 
 The hello itself is public and not independently signed or bound as a separate
-transcript to TLS. Tampering can cause failure; it cannot make an endpoint downgrade
-to plaintext. After hello, both pairing and transfer establish TLS directly on the
-Bluetooth byte stream:
+transcript to TLS. Tampering can cause failure. After hello, both pairing and
+transfer establish TLS directly on the Bluetooth byte stream:
 
 | Component | Selection |
 | --- | --- |
@@ -159,9 +155,8 @@ Default first-use pairing accepts an offered key and assumes no active intercept
 Users can compare fingerprints out of band afterward, or provide `-trust` to require
 a known fingerprint before saving. Fingerprints are hex SHA-256 of raw public keys,
 not signatures/certificate fingerprints. Existing saved keys cannot silently change.
-Re-pairing a known ID with the same key is idempotent and preserves its local alias;
-legacy identity-only relationships can acquire keys. Conflicting peer aliases
-require an explicit unique override.
+Re-pairing a known ID with the same key is idempotent and preserves its local alias.
+Conflicting peer aliases require an explicit unique override.
 
 After agreement and local configuration persistence, endpoints exchange encrypted
 ASCII `saved` records, initiator first. These confirm application-level success,
@@ -213,14 +208,13 @@ radio. Denial-of-service defenses are limited.
 Private seeds are stored unencrypted in `config.yaml`. Unix file modes restrict
 normal access; Windows depends on ACLs. Compromised backups or local malware can
 expose identity keys. There is no distributed revocation or automatic rotation:
-forget and re-pair affected relationships. There is no plaintext escape hatch,
-even for older identity-only peers; they must pair again.
+forget and re-pair affected relationships.
 
 ## Physical-device testing
 
 Hardware-free tests exercise automatic/two-sided pairing, one-sided selection in
 both ID orders, simultaneous selection, learned/overridden names, optional
-fingerprints, changed-key refusal, mandatory encryption, binary/empty streams,
+fingerprints, changed-key refusal, TLS sessions, binary/empty streams,
 malformed/truncated records, TLS tampering, CLI files/pipelines, destination cleanup,
 mailbox sequencing/backpressure, and a full encrypted minimum-MTU stream. Native
 macOS and Windows adapters compile. The following physical checks remain unrun.
@@ -236,8 +230,8 @@ For macOS↔Windows, macOS↔macOS, and Windows↔Windows, test both transfer di
    checks, wrong fingerprints, and changed-key refusal.
 4. Test both transfer startup orders, empty/one-byte/random/32 KiB-boundary/large
    files, pipelines, receiving destinations, checksums, throughput, and memory.
-5. Try unexpected senders, missing keys, and old unencrypted protocol hellos. Confirm
-   no plaintext payload is accepted or silently enabled.
+5. Try unexpected senders, incorrect keys, and malformed handshakes. Confirm
+   authentication failures prevent payload transfer.
 6. Disable/unplug Bluetooth, kill/cancel processes, and use short deadlines. Check
    native helper cleanup and incomplete destination cleanup.
 7. Test full disks, existing/unwritable paths, unsupported hard links, and final

@@ -7,9 +7,8 @@ permalink: /examples
 
 # Examples
 
-Use two devices. These examples call the installed command `btfling`. On Windows,
-substitute `.\windows.exe` when using the locally built command under that name,
-and keep `btfling-ble.exe` beside it.
+Use two devices. These examples call the command `btfling`. On Windows,
+use `.\btfling.exe` and keep `btfling-ble.exe` beside it.
 
 ## First run and the TUI
 
@@ -29,7 +28,7 @@ go run ./internal/buildhelper -out .
 go run . tui
 ```
 
-Rebuild helpers on both devices when updating the pairing protocol.
+Keep the command and helper from the same build together.
 
 ## Pair from the CLI
 
@@ -127,10 +126,10 @@ On Windows:
 
 ```powershell
 # Bob
-.\windows.exe receive alice -out .\photo.jpg
+.\btfling.exe receive alice -out .\photo.jpg
 
 # Alice, on the other device
-.\windows.exe send bob -in .\photo.jpg
+.\btfling.exe send bob -in .\photo.jpg
 ```
 
 ## Use binary pipelines
@@ -179,12 +178,11 @@ else
 fi
 ```
 
-## Upgrade an older peer relationship
+## Replace a device key
 
-If a saved peer has no key, run `pair` again on both devices. The ID relationship
-is upgraded with the offered key; existing aliases are preserved. There is no
-plaintext transfer mode. For an intentional key replacement, explicitly forget
-the old relationship on both devices, then pair with verified fingerprints:
+If a device's key changes, pairing and transfers reject it. Verify the new
+fingerprint through a trusted channel, then explicitly forget the old relationship
+on both devices before pairing again:
 
 ```sh
 btfling forget bob

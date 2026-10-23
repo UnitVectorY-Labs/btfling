@@ -135,7 +135,7 @@ func TestReceiveFailureDoesNotPublishOrOverwrite(t *testing.T) {
 }
 func TestCLIUsageAndTrustManagement(t *testing.T) {
 	dir, _, _ := setupCLI(t)
-	for _, args := range [][]string{{"unknown"}, {"send"}, {"send", "bob", "-out", "x"}, {"pair", "-trust", "invalid"}, {"discover", "-timeout", "-1s"}} {
+	for _, args := range [][]string{{"unknown"}, {"send"}, {"send", "bob", "-out", "x"}, {"pair", "-trust", "invalid"}, {"pair", "-listen"}, {"pair", "-trust-new"}, {"discover", "-timeout", "-1s"}} {
 		e := Run(context.Background(), append([]string{"--config", dir}, args...), bytes.NewReader(nil), io.Discard, io.Discard)
 		if !IsUsage(e) {
 			t.Fatalf("%v: expected usage error, got %v", args, e)

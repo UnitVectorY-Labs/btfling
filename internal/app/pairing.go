@@ -229,7 +229,7 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 					return config.Peer{}, errors.New("peer fingerprint does not match -trust; peer was not saved")
 				}
 				for _, old := range c.Peers {
-					if old.ID == p.ID && len(old.PublicKey) > 0 && !bytes.Equal(old.PublicKey, p.PublicKey) {
+					if old.ID == p.ID && !bytes.Equal(old.PublicKey, p.PublicKey) {
 						event.decision <- false
 						return config.Peer{}, errors.New("known peer public key changed; refusing to replace trust")
 					}
@@ -260,7 +260,7 @@ func rememberPeer(c *config.Config, p config.Peer, alias string) error {
 		if old.ID != p.ID {
 			continue
 		}
-		if len(old.PublicKey) > 0 && !bytes.Equal(old.PublicKey, p.PublicKey) {
+		if !bytes.Equal(old.PublicKey, p.PublicKey) {
 			return errors.New("known peer key changed")
 		}
 		p.Name = old.Name

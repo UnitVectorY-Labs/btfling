@@ -38,7 +38,7 @@ CLI pairs with the first nearby device in pairing mode. The TUI lets you choose.
 Peer names are learned automatically; -as overrides the local alias.
 Pairing trusts first-use keys by default. Compare fingerprints out of band,
 or supply -trust FINGERPRINT to verify the remote key before saving it.
-All transfers use mutually authenticated encryption. No plaintext mode.
+Transfers use mutually authenticated TLS 1.3.
 
 Send reads stdin by default; receive writes binary payload to stdout.
 -in reads a file; -out creates a new file without overwriting an existing path.
@@ -112,12 +112,6 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		if len(args) != 0 {
 			return usage("keygen takes no arguments")
 		}
-		if e = c.Keygen(); e != nil {
-			return e
-		}
-		if e = c.Save(dir); e != nil {
-			return e
-		}
 		fmt.Fprintln(out, config.Fingerprint(c.PublicKey()))
 		return nil
 	case "peers":
@@ -125,10 +119,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 			return usage("peers takes no arguments")
 		}
 		for _, p := range c.Peers {
-			fp := "needs-pairing"
-			if len(p.PublicKey) > 0 {
-				fp = config.Fingerprint(p.PublicKey)
-			}
+			fp := config.Fingerprint(p.PublicKey)
 			fmt.Fprintf(out, "%s\t%s\t%s\n", p.Name, p.ID, fp)
 		}
 		return nil
@@ -199,14 +190,6 @@ func ensureConfig(dir string, errOut io.Writer) (*config.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load or create config: %w", err)
 	}
-	if len(c.PrivateKey) == 0 {
-		if err = c.Keygen(); err != nil {
-			return nil, err
-		}
-		if err = c.Save(dir); err != nil {
-			return nil, err
-		}
-	}
 	if created {
 		fmt.Fprintln(errOut, "Initialized", c.Name, "in", dir)
 	}
@@ -224,9 +207,6 @@ func pair(ctx context.Context, dir string, c *config.Config, args []string, errO
 	alias := f.String("as", "", "override the learned peer nickname")
 	trust := f.String("trust", "", "optional expected SHA-256 public-key fingerprint")
 	timeout := f.Duration("timeout", 0, "overall timeout")
-	// Accept old explicit TOFU/listener spellings during migration; both now use mutual discovery.
-	f.Bool("trust-new", false, "first-use trust (now the default)")
-	f.Bool("listen", false, "pairing always advertises and discovers")
 	if e := f.Parse(args); e != nil {
 		return usage(e.Error())
 	}
@@ -293,7 +273,7 @@ func transfer(ctx context.Context, c *config.Config, cmd string, args []string, 
 		return e
 	}
 	if len(p.PublicKey) != 32 {
-		return errors.New("peer has no encryption key; run pair again before transferring")
+		return errors.New("invalid trusted peer public key")
 	}
 	if cmd == "send" && *input != "" {
 		file, e := os.Open(*input)

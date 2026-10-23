@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestConfigRoundTripAndTrust(t *testing.T) {
@@ -111,5 +113,42 @@ func TestDefaultName(t *testing.T) {
 		if name := defaultName(hostname); !ValidName(name) {
 			t.Fatalf("invalid default nickname %q", name)
 		}
+	}
+}
+
+func TestRejectMissingIdentityKeys(t *testing.T) {
+	for _, which := range []string{"local", "peer"} {
+		t.Run(which, func(t *testing.T) {
+			dir := t.TempDir()
+			c, err := Init(dir, "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.Peers = []Peer{{Name: "bob", ID: "0123456789abcdef0123456789abcdef", PublicKey: bytes.Repeat([]byte{7}, 32)}}
+			if which == "local" {
+				c.PrivateKey = nil
+			} else {
+				c.Peers[0].PublicKey = nil
+			}
+			if err := c.Validate(); err == nil {
+				t.Fatal("accepted missing identity key")
+			}
+			// Loading an invalid configuration must fail without rewriting it.
+			data, err := yaml.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := LoadOrInit(dir); err == nil {
+				t.Fatal("accepted incomplete configuration")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(data, after) {
+				t.Fatal("modified invalid configuration", err)
+			}
+		})
 	}
 }

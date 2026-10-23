@@ -24,58 +24,45 @@ func identities(t *testing.T) (*config.Config, *config.Config) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = a.Keygen(); e != nil {
-		t.Fatal(e)
-	}
-	if e = b.Keygen(); e != nil {
-		t.Fatal(e)
-	}
 	return a, b
 }
 func TestBinaryTransfer(t *testing.T) {
-	for _, encrypted := range []bool{true} {
-		t.Run(map[bool]string{false: "plain", true: "TLS13"}[encrypted], func(t *testing.T) {
-			a, b := identities(t)
-			ap := config.Peer{ID: a.ID, Name: a.Name}
-			bp := config.Peer{ID: b.ID, Name: b.Name}
-			if encrypted {
-				ap.PublicKey = a.PublicKey()
-				bp.PublicKey = b.PublicKey()
+	a, b := identities(t)
+	ap := config.Peer{ID: a.ID, Name: a.Name, PublicKey: a.PublicKey()}
+	bp := config.Peer{ID: b.ID, Name: b.Name, PublicKey: b.PublicKey()}
+	for _, payload := range [][]byte{nil, {0, 255, 1, 0}, bytes.Repeat([]byte{0, 255, 12, 34, 128}, 30000)} {
+		x, y := net.Pipe()
+		x.SetDeadline(time.Now().Add(10 * time.Second))
+		y.SetDeadline(time.Now().Add(10 * time.Second))
+		var received bytes.Buffer
+		committed := false
+		done := make(chan error, 1)
+		go func() {
+			defer y.Close()
+			s, e := Open(context.Background(), y, b, &ap, false, "send")
+			if e == nil {
+				e = Receive(s, &received, func() error { committed = true; return nil }, nil)
 			}
-			for _, payload := range [][]byte{nil, {0, 255, 1, 0}, bytes.Repeat([]byte{0, 255, 12, 34, 128}, 30000)} {
-				x, y := net.Pipe()
-				x.SetDeadline(time.Now().Add(10 * time.Second))
-				y.SetDeadline(time.Now().Add(10 * time.Second))
-				var received bytes.Buffer
-				committed := false
-				done := make(chan error, 1)
-				go func() {
-					defer y.Close()
-					s, e := Open(context.Background(), y, b, &ap, false, "send")
-					if e == nil {
-						e = Receive(s, &received, func() error { committed = true; return nil }, nil)
-					}
-					done <- e
-				}()
-				s, e := Open(context.Background(), x, a, &bp, true, "send")
-				if e == nil {
-					e = Send(s, bytes.NewReader(payload), nil)
-				}
-				x.Close()
-				if e != nil {
-					t.Fatal(e)
-				}
-				if e = <-done; e != nil {
-					t.Fatal(e)
-				}
-				if !committed || !bytes.Equal(payload, received.Bytes()) {
-					t.Fatal("payload/commit mismatch")
-				}
-			}
-		})
+			done <- e
+		}()
+		s, e := Open(context.Background(), x, a, &bp, true, "send")
+		if e == nil {
+			e = Send(s, bytes.NewReader(payload), nil)
+		}
+		x.Close()
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = <-done; e != nil {
+			t.Fatal(e)
+		}
+		if !committed || !bytes.Equal(payload, received.Bytes()) {
+			t.Fatal("payload/commit mismatch")
+		}
 	}
 }
-func TestRejectEncryptionDowngradeAndWrongIdentity(t *testing.T) {
+
+func TestRejectUntrustedPeer(t *testing.T) {
 	for _, which := range []string{"missing key", "identity", "key"} {
 		t.Run(which, func(t *testing.T) {
 			a, b := identities(t)
@@ -208,25 +195,72 @@ func (c *tamperConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-func TestPlaintextAndMissingKeysRejected(t *testing.T) {
+func TestTLSHandshakeRequired(t *testing.T) {
 	a, b := identities(t)
 	x, y := net.Pipe()
 	defer x.Close()
 	defer y.Close()
+	x.SetDeadline(time.Now().Add(3 * time.Second))
+	y.SetDeadline(time.Now().Add(3 * time.Second))
 	done := make(chan error, 1)
 	go func() {
-		_, e := Open(context.Background(), y, b, &config.Peer{ID: a.ID, PublicKey: a.PublicKey()}, false, "send")
-		done <- e
+		_, err := Open(context.Background(), y, b, &config.Peer{ID: a.ID, PublicKey: a.PublicKey()}, false, "send")
+		done <- err
 	}()
-	raw := hello{Version: Version, ID: a.ID, Name: a.Name, PublicKey: a.PublicKey(), Operation: "send", Encrypted: false}
+	raw := hello{Version: Version, ID: a.ID, Name: a.Name, PublicKey: a.PublicKey(), Operation: "send"}
 	encoded, _ := json.Marshal(raw)
-	if e := WriteFrame(x, encoded); e != nil {
-		t.Fatal(e)
+	if err := WriteFrame(x, encoded); err != nil {
+		t.Fatal(err)
 	}
-	if e := <-done; e == nil {
-		t.Fatal("accepted plaintext hello")
+	if _, err := ReadFrame(x); err != nil {
+		t.Fatal(err)
 	}
-	if _, e := Open(context.Background(), x, a, &config.Peer{ID: b.ID}, true, "send"); e == nil {
-		t.Fatal("accepted peer without encryption key")
+	// A valid hello must be followed by a TLS handshake before any transfer records.
+	if _, err := x.Write([]byte("invalid TLS record")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("accepted payload without a TLS handshake")
+	}
+}
+
+func TestOpenRejectsInvalidKeys(t *testing.T) {
+	for _, which := range []string{"local", "peer"} {
+		t.Run(which, func(t *testing.T) {
+			a, b := identities(t)
+			expected := config.Peer{ID: b.ID, PublicKey: b.PublicKey()}
+			if which == "local" {
+				a.PrivateKey = []byte{1}
+			} else {
+				expected.PublicKey = nil
+			}
+			x, y := net.Pipe()
+			defer x.Close()
+			defer y.Close()
+			if _, err := Open(context.Background(), x, a, &expected, true, "send"); err == nil {
+				t.Fatal("accepted invalid key")
+			}
+		})
+	}
+}
+
+func TestRejectUnsupportedProtocolVersion(t *testing.T) {
+	a, b := identities(t)
+	x, y := net.Pipe()
+	defer x.Close()
+	defer y.Close()
+	x.SetDeadline(time.Now().Add(time.Second))
+	y.SetDeadline(time.Now().Add(time.Second))
+	done := make(chan error, 1)
+	go func() {
+		_, err := Open(context.Background(), y, b, nil, false, "pair")
+		done <- err
+	}()
+	encoded, _ := json.Marshal(hello{Version: Version + 1, ID: a.ID, Name: a.Name, PublicKey: a.PublicKey(), Operation: "pair"})
+	if err := WriteFrame(x, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("accepted unsupported protocol version")
 	}
 }
