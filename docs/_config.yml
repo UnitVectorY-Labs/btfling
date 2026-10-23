@@ -1,0 +1,40 @@
+title: btfling
+description: "Send files and binary streams between nearby computers over encrypted Bluetooth."
+
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+
+callouts:
+  highlight:
+    color: yellow
+  important:
+    title: Important
+    color: blue
+  new:
+    title: New
+    color: green
+  note:
+    title: Note
+    color: purple
+  warning:
+    title: Warning
+    color: red
+
+mermaid:
+  # Version of mermaid library
+  # Pick an available version from https://cdn.jsdelivr.net/npm/mermaid/
+  version: "11.16.1" # MERMAIDVERSION
+
+# External navigation links
+nav_external_links:
+  - title: btfling on GitHub
+    url: https://github.com/UnitVectorY-Labs/btfling
+
+# Footer "Edit this page on GitHub" link text
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub."
+gh_edit_repository: "https://github.com/UnitVectorY-Labs/btfling"
+gh_edit_branch: "main"
+gh_edit_source: "docs"
+gh_edit_view_mode: "tree"

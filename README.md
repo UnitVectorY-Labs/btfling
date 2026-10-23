@@ -1,10 +1,11 @@
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Work In Progress](https://img.shields.io/badge/Status-Work%20In%20Progress-yellow)](https://guide.unitvectorylabs.com/bestpractices/status/#work-in-progress) 
+
 # btfling
 
-**Nearby files. One command. Encrypted Bluetooth.**
+Send files and binary streams between nearby computers over encrypted Bluetooth.
 
-btfling sends files and binary streams directly between nearby computers. Pair
-once, remember the other device by name, and transfer from a terminal or shell
-pipeline. Payloads travel exclusively over Bluetooth—no Wi-Fi, accounts, Internet
+Pair once, remember the other device by name, and transfer from a terminal or
+shell pipeline. Payloads travel exclusively over Bluetooth—no Wi-Fi, accounts, Internet
 relays, or cloud storage.
 
 - **One Pair mode:** both devices advertise and discover each other. Names are learned automatically.
@@ -18,7 +19,7 @@ implementation: physical two-device interoperability, including concurrent
 advertising/scanning, still needs verification on real adapters. BLE's conservative
 transport favors compatibility over speed. Termux Bluetooth is not implemented.
 
-## Get started
+## Quick Start
 
 Build the Go command and the native helper together. On macOS, install Go 1.26+
 and Xcode Command Line Tools, then from the repository root:
@@ -62,8 +63,15 @@ btfling receive alice -out report.pdf
 btfling send bob -in report.pdf
 ```
 
-See [usage and building](docs/USAGE.md), [examples](docs/EXAMPLE.md),
-[configuration](docs/CONFIG.md), and the [protocol and security model](docs/PROTOCOL.md).
+## Documentation
+
+- [Overview](docs/README.md) — purpose and execution flow
+- [Installation](docs/INSTALL.md) — platform requirements, building, and helper deployment
+- [Usage](docs/USAGE.md) — commands, flags, terminal interface, and exit codes
+- [Examples](docs/EXAMPLES.md) — pairing, file transfers, and pipelines
+- [Configuration](docs/CONFIG.md) — identity, keys, peers, and storage
+- [Protocol and Security](docs/PROTOCOL.md) — wire format, trust model, and physical-device testing
+- [Development](docs/DEVELOPMENT.md) — validation, repository standards, and documentation maintenance
 
 ## Development
 
@@ -78,3 +86,7 @@ verification, key pinning, mandatory encryption, binary pipelines, destination
 cleanup, TLS tampering, cancellation, and minimum-MTU GATT mailboxes. See the
 [physical-device checklist](docs/PROTOCOL.md#physical-device-testing) for the
 remaining radio/OS acceptance tests.
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.

@@ -1,0 +1,44 @@
+name: btfling
+default_branch: main
+config:
+  description: "Send files and binary streams between nearby computers over encrypted Bluetooth."
+  license: MIT
+  language: go
+  release: build-go
+  justfile: true
+  status: wip
+  release_github: false
+  versions:
+    go: 1.26.0
+  codecov:
+    enabled: false
+  docs:
+    enabled: true
+    domain: btfling.unitvectorylabs.com
+  gitignore:
+    - /btfling-ble
+    - /dist/
+    - /bin/
+    - '*.pdb'
+    - /coverage.txt
+    - /coverage.html
+    - /internal/ble/native/bin/
+    - /internal/ble/native/obj/
+    - /config.yaml
+    - /.config/
+    - .env
+    - .env.*
+    - '!.env.example'
+    - '*.key'
+    - '*.pem'
+    - /.idea/
+    - /.vscode/
+  justfile_extra: |
+    # Build the native BLE helper on macOS or Windows
+    build-helper:
+      go run ./internal/buildhelper -out dist
+
+    # Build the Go command and native helper together on macOS or Windows
+    build-app:
+      go build -o dist/ .
+      go run ./internal/buildhelper -out dist

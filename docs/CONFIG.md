@@ -1,3 +1,10 @@
+---
+layout: default
+title: Configuration
+nav_order: 5
+permalink: /config
+---
+
 # Configuration
 
 ## Location and automatic setup

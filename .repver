@@ -1,0 +1,63 @@
+# https://github.com/UnitVectorY-Labs/repver
+commands:
+
+ - name: "goversion"
+   params:
+   - name: "version"
+     pattern: "^(?P<major>0|[1-9]\\d*)\\.(?P<minor>0|[1-9]\\d*)\\.(?P<patch>0|[1-9]\\d*)$"
+   targets:
+   - path: "go.mod"
+     pattern: "^go (?P<version>.*) // GOVERSION$"
+     transform: "{{major}}.{{minor}}.0"
+   - path: ".github/workflows/build-go.yml"
+     pattern: "^          go-version: '(?P<version>.*)' # GOVERSION$"
+   - path: ".github/workflows/govulncheck-go.yml"
+     pattern: "^          go-version: '(?P<version>.*)' # GOVERSION$"
+   - path: ".github/workflows/govulncheck-go.yml"
+     pattern: "^          go-version-input: '(?P<version>.*)' # GOVERSION$"
+   git:
+     create_branch: true
+     branch_name: "repver/go-v{{version}}"
+     commit: true
+     commit_message: "Update Go version to v{{version}}"
+     push: true
+     remote: "origin"
+     pull_request: "GITHUB_CLI"
+     return_to_original_branch: true
+     delete_branch: true
+
+ - name: "justthedocsversion"
+   params:
+   - name: "version"
+     pattern: "^v(?P<major>0|[1-9]\\d*)\\.(?P<minor>0|[1-9]\\d*)\\.(?P<patch>0|[1-9]\\d*)$"
+   targets:
+   - path: "docs/_config.yml"
+     pattern: "^remote_theme: just-the-docs/just-the-docs@(?P<version>.*)$"
+   git:
+     create_branch: true
+     branch_name: "repver/just-the-docs-{{version}}"
+     commit: true
+     commit_message: "Update just-the-docs version to v{{version}}"
+     push: true
+     remote: "origin"
+     pull_request: "GITHUB_CLI"
+     return_to_original_branch: true
+     delete_branch: true
+
+ - name: "mermaidversion"
+   params:
+   - name: "version"
+     pattern: "^(?P<major>0|[1-9]\\d*)\\.(?P<minor>0|[1-9]\\d*)\\.(?P<patch>0|[1-9]\\d*)$"
+   targets:
+   - path: "docs/_config.yml"
+     pattern: "^  version: \"(?P<version>[^\"]+)\" # MERMAIDVERSION$"
+   git:
+     create_branch: true
+     branch_name: "repver/mermaid-{{version}}"
+     commit: true
+     commit_message: "Update mermaid version to v{{version}}"
+     push: true
+     remote: "origin"
+     pull_request: "GITHUB_CLI"
+     return_to_original_branch: true
+     delete_branch: true

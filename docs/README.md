@@ -1,3 +1,10 @@
+---
+layout: default
+title: btfling
+nav_order: 1
+permalink: /
+---
+
 # btfling
 
 **Nearby files. One command. Encrypted Bluetooth.**
@@ -23,5 +30,23 @@ Native Bluetooth adapters are implemented for macOS and Windows. This initial
 version still needs physical two-device interoperability testing. Termux Bluetooth
 is not yet implemented.
 
-Explore [usage](USAGE.md), [examples](EXAMPLE.md), [configuration](CONFIG.md), and
-[protocol and security](PROTOCOL.md).
+## Execution flow
+
+1. An operational command creates missing configuration, including the device ID
+   and private key, while preserving an existing identity.
+2. Pair mode advertises and scans on both devices. Selecting a peer exchanges keys
+   and saves its name and trust record. Verify fingerprints through a trusted
+   channel or supply `-trust` before saving.
+3. A receiver advertises while a sender scans and connects. Mutual TLS authenticates
+   saved peer keys before transferring file or pipeline bytes over Bluetooth.
+4. The receiver verifies the byte count and checksum before acknowledging success.
+   File destinations are published only after verification.
+
+## Documentation
+
+- [Installation](INSTALL.md) — supported platforms, native helpers, and source builds
+- [Usage](USAGE.md) — command reference, flags, TUI controls, and exit codes
+- [Examples](EXAMPLES.md) — practical pairing and transfer workflows
+- [Configuration](CONFIG.md) — identities, peer trust, YAML schema, and recovery
+- [Protocol and Security](PROTOCOL.md) — transport details, security limits, and testing
+- [Development](DEVELOPMENT.md) — validation, repository standards, and documentation maintenance

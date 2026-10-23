@@ -1,3 +1,10 @@
+---
+layout: default
+title: Protocol and Security
+nav_order: 6
+permalink: /protocol
+---
+
 # Protocol and security
 
 This describes wire protocol **version 2**, with mandatory encryption and mutual
