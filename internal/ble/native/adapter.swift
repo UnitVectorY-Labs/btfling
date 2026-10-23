@@ -1,11 +1,13 @@
 import Foundation
 import CoreBluetooth
 
-let serviceID = CBUUID(string: "c9e0b001-49f0-4c98-9c83-3ad797a40d10")
-let identityID = CBUUID(string: "c9e0b002-49f0-4c98-9c83-3ad797a40d10")
-let rxID = CBUUID(string: "c9e0b003-49f0-4c98-9c83-3ad797a40d10")
-let txID = CBUUID(string: "c9e0b004-49f0-4c98-9c83-3ad797a40d10")
+let serviceID = CBUUID(string: "8462b001-8c34-4f19-a9ef-8ac72d7312b6")
+let identityID = CBUUID(string: "8462b002-8c34-4f19-a9ef-8ac72d7312b6")
+let rxID = CBUUID(string: "8462b003-8c34-4f19-a9ef-8ac72d7312b6")
+let txID = CBUUID(string: "8462b004-8c34-4f19-a9ef-8ac72d7312b6")
+let outputLock=NSLock()
 func emit(_ value: [String:Any]) {
+    outputLock.lock();defer{outputLock.unlock()}
     if let data = try? JSONSerialization.data(withJSONObject: value) {
         FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
     }
@@ -23,14 +25,17 @@ final class Adapter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, C
     var seen = Set<UUID>()
     var rx: CBCharacteristic?
     var tx: CBCharacteristic?
-    var value = Data(repeating: 0, count: 8)
+    var localTX: CBMutableCharacteristic?
+    var subscriber: CBCentral?
+    var outgoing: [Data] = []
     var identity = Data()
     var owner: UUID?
     var connected = false
+    var lastMax = 0
     override init() {
         super.init()
         if mode == "listen" || mode == "pair-listen" {
-            identity = try! JSONSerialization.data(withJSONObject: ["id":target,"name":nickname,"pairing":mode == "pair-listen"])
+            identity = try! JSONSerialization.data(withJSONObject: ["version":1,"id":target,"name":nickname,"pairing":mode == "pair-listen", "accepting":true])
             manager = CBPeripheralManager(delegate:self, queue: .main)
         } else { central = CBCentralManager(delegate:self, queue: .main) }
     }
@@ -47,7 +52,7 @@ final class Adapter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, C
         if c.state == .poweredOn { c.scanForPeripherals(withServices:[serviceID], options:[CBCentralManagerScanOptionAllowDuplicatesKey:true]) }
     }
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String:Any], rssi RSSI: NSNumber) {
-        if seen.insert(p.identifier).inserted { pending.append(p); next() }
+        if seen.count < 256 && seen.insert(p.identifier).inserted { pending.append(p); next() }
     }
     func next() {
         if current != nil || pending.isEmpty { return }
@@ -77,27 +82,63 @@ final class Adapter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, C
         p.readValue(for:id)
     }
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
-        if let e=error {fail("GATT read: \(e)")}
+        if let e=error {fail("GATT value: \(e)")}
         guard let data=c.value else {fail("empty GATT response")}
         if c.uuid == identityID {
             guard let obj=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any], let id=obj["id"] as? String else {central.cancelPeripheralConnection(p);return}
-            if mode == "scan" {emit(["event":"peer","id":id,"name":obj["name"] as? String ?? "", "pairing":obj["pairing"] as? Bool ?? false]);central.cancelPeripheralConnection(p)}
-            else if id == target {connected=true;central.stopScan();emit(["event":"ready"])}
+            guard let version=obj["version"] as? Int, version == 1 else {if id == target {fail("Unsupported btfling protocol version")};central.cancelPeripheralConnection(p);return}
+            if mode == "scan" {emit(["event":"peer","version":1,"id":id,"name":obj["name"] as? String ?? "", "pairing":obj["pairing"] as? Bool ?? false]);central.cancelPeripheralConnection(p)}
+            else if id == target {
+                guard let rx=rx, let tx=tx, rx.properties.contains(.writeWithoutResponse), tx.properties.contains(.notify) else {fail("Incompatible streaming characteristics")}
+                central.stopScan();p.setNotifyValue(true,for:tx)
+            }
             else {central.cancelPeripheralConnection(p)}
         } else if c.uuid == txID {emit(["event":"packet","data":data.base64EncodedString()])}
     }
-    func peripheral(_ p: CBPeripheral, didWriteValueFor c: CBCharacteristic, error: Error?) {
-        if let e=error {fail("GATT write: \(e)")}
-        if let tx=tx {p.readValue(for:tx)}
+    func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor c: CBCharacteristic, error: Error?) {
+        if let e=error {fail("Subscribe: \(e)")}
+        guard c.isNotifying else {fail("Notification subscription ended")}
+        connected=true;lastMax=min(512,p.maximumWriteValueLength(for:.withoutResponse))
+        emit(["event":"ready","max_value":lastMax])
+    }
+    func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { drain() }
+    func peripheralManagerIsReady(toUpdateSubscribers m: CBPeripheralManager) { drain() }
+    func peripheralManager(_ m: CBPeripheralManager, central c: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
+        guard characteristic.uuid == txID else {return}
+        if owner != nil {return}
+        owner=c.identifier;subscriber=c;connected=true;m.stopAdvertising()
+        identity=try! JSONSerialization.data(withJSONObject:["version":1,"id":target,"name":nickname,"pairing":mode == "pair-listen","accepting":false])
+        lastMax=min(512,c.maximumUpdateValueLength)
+        emit(["event":"ready","max_value":lastMax])
+    }
+    func peripheralManager(_ m: CBPeripheralManager, central c: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
+        if owner == c.identifier {fail("Bluetooth notification subscriber disconnected")}
+    }
+    func drain() {
+        let maximum = subscriber.map {min(512,$0.maximumUpdateValueLength)} ?? current.map {min(512,$0.maximumWriteValueLength(for:.withoutResponse))} ?? 0
+        if maximum != lastMax && maximum > 0 {lastMax=maximum;emit(["event":"size","max_value":maximum])}
+        while let data=outgoing.first {
+            if let m=manager, let c=subscriber, let tx=localTX {
+                guard data.count <= min(512,c.maximumUpdateValueLength) else {fail("Notification size shrank")}
+                if !m.updateValue(data,for:tx,onSubscribedCentrals:[c]) {return}
+            } else if let p=current, let rx=rx {
+                guard data.count <= min(512,p.maximumWriteValueLength(for:.withoutResponse)) else {fail("Write size shrank")}
+                if !p.canSendWriteWithoutResponse {return}
+                p.writeValue(data,for:rx,type:.withoutResponse)
+            } else {fail("Adapter is not connected")}
+            outgoing.removeFirst();emit(["event":"sent"])
+        }
     }
     func peripheralManagerDidUpdateState(_ m: CBPeripheralManager) {
         check(m.state)
         if m.state == .poweredOn {
             let s=CBMutableService(type:serviceID,primary:true)
+            let notify=CBMutableCharacteristic(type:txID,properties:[.notify],value:nil,permissions:[.readable])
+            localTX=notify
             s.characteristics=[
-                CBMutableCharacteristic(type:identityID,properties:[.read],value:identity,permissions:[.readable]),
-                CBMutableCharacteristic(type:rxID,properties:[.write],value:nil,permissions:[.writeable]),
-                CBMutableCharacteristic(type:txID,properties:[.read],value:nil,permissions:[.readable])]
+                CBMutableCharacteristic(type:identityID,properties:[.read],value:nil,permissions:[.readable]),
+                CBMutableCharacteristic(type:rxID,properties:[.writeWithoutResponse],value:nil,permissions:[.writeable]),
+                notify]
             m.add(s)
         }
     }
@@ -106,35 +147,36 @@ final class Adapter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, C
         m.startAdvertising([CBAdvertisementDataServiceUUIDsKey:[serviceID]])
     }
     func peripheralManagerDidStartAdvertising(_ m: CBPeripheralManager, error: Error?) {
-        if let e=error {fail("BLE advertising: \(e)")};emit(["event":"ready"])
+        if let e=error {fail("BLE advertising: \(e)")}
     }
     func peripheralManager(_ m: CBPeripheralManager, didReceiveRead r: CBATTRequest) {
-        if r.characteristic.uuid != identityID, let owner=owner, owner != r.central.identifier {m.respond(to:r,withResult:.insufficientResources);return}
-        let data=r.characteristic.uuid == identityID ? identity : value
+        guard r.characteristic.uuid == identityID else {m.respond(to:r,withResult:.readNotPermitted);return}
+        let data=identity
         guard r.offset <= data.count else {m.respond(to:r,withResult:.invalidOffset);return}
         r.value=data.subdata(in:r.offset..<data.count);m.respond(to:r,withResult:.success)
     }
     func peripheralManager(_ m: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for r in requests {
-            if let owner=owner, owner != r.central.identifier {m.respond(to:r,withResult:.insufficientResources);return}
-            guard r.characteristic.uuid == rxID, r.offset == 0, let data=r.value, data.count >= 8, data.count <= 20 else {m.respond(to:r,withResult:.invalidAttributeValueLength);return}
-            owner=r.central.identifier
+            // Write Commands have no ATT response. Ownership comes from subscription.
+            guard owner == r.central.identifier else {continue}
+            guard r.characteristic.uuid == rxID, r.offset == 0, let data=r.value, data.count >= 36, data.count <= 512 else {fail("Malformed GATT stream write")}
             emit(["event":"packet","data":data.base64EncodedString()])
         }
-        if let r=requests.first {m.respond(to:r,withResult:.success)}
     }
     func command(_ obj:[String:Any]) {
-        guard let op=obj["op"] as? String, let str=obj["data"] as? String, let data=Data(base64Encoded:str) else {fail("invalid adapter command")}
-        if op == "value" {value=data}
-        else if op == "exchange", let p=current, let rx=rx {p.writeValue(data,for:rx,type:.withResponse)}
-        else {fail("adapter is not connected")}
+        guard obj["op"] as? String == "send", let str=obj["data"] as? String, let data=Data(base64Encoded:str), data.count >= 36, data.count <= 512 else {fail("Invalid adapter command")}
+        guard outgoing.count < 16 else {fail("Native admission queue overflow")}
+        outgoing.append(data);drain()
     }
+
 }
 let adapter=Adapter()
+let commandSlots=DispatchSemaphore(value:16)
 DispatchQueue.global().async {
     while let line=readLine() {
         guard let data=line.data(using:.utf8), let obj=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else {fail("invalid JSON command")}
-        DispatchQueue.main.async {adapter.command(obj)}
+        commandSlots.wait()
+        DispatchQueue.main.async {adapter.command(obj);commandSlots.signal()}
     }
     exit(0)
 }

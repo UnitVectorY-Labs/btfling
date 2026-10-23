@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/UnitVectorY-Labs/btfling/internal/config"
@@ -24,13 +23,15 @@ type Peer struct {
 	Pairing bool   `json:"pairing"`
 }
 type message struct {
-	Event   string `json:"event,omitempty"`
-	Op      string `json:"op,omitempty"`
-	Data    []byte `json:"data,omitempty"`
-	Error   string `json:"error,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Pairing bool   `json:"pairing,omitempty"`
+	Event    string `json:"event,omitempty"`
+	Op       string `json:"op,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	Error    string `json:"error,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Pairing  bool   `json:"pairing,omitempty"`
+	MaxValue int    `json:"max_value,omitempty"`
+	Version  int    `json:"version,omitempty"`
 }
 type helper struct {
 	cmd      *exec.Cmd
@@ -108,6 +109,9 @@ func (h *helper) send(m message) error {
 	return json.NewEncoder(h.in).Encode(m)
 }
 func (h *helper) next(ctx context.Context) (message, error) {
+	if e := ctx.Err(); e != nil {
+		return message{}, e
+	}
 	decode := func(m message) (message, error) {
 		if m.Event == "error" {
 			return m, errors.New(m.Error)
@@ -159,7 +163,7 @@ func Discover(ctx context.Context, found func(Peer)) error {
 		if e != nil {
 			return e
 		}
-		if m.Event == "peer" && validID(m.ID) && config.ValidName(m.Name) {
+		if m.Event == "peer" && m.Version == WireVersion && validID(m.ID) && config.ValidName(m.Name) {
 			found(Peer{ID: m.ID, Name: m.Name, Pairing: m.Pairing})
 		}
 	}
@@ -175,6 +179,8 @@ func Open(ctx context.Context, listen bool, id, name string) (io.ReadWriteCloser
 		cancel()
 		return nil, e
 	}
+	mValue := 0
+	var early [][]byte
 	for {
 		m, e := h.next(ctx)
 		if e != nil {
@@ -182,11 +188,20 @@ func Open(ctx context.Context, listen bool, id, name string) (io.ReadWriteCloser
 			h.stop()
 			return nil, e
 		}
+		if m.Event == "packet" {
+			if len(early) >= 16 {
+				cancel()
+				h.stop()
+				return nil, errors.New("too many pre-subscription frames")
+			}
+			early = append(early, m.Data)
+		}
 		if m.Event == "ready" {
+			mValue = m.MaxValue
 			break
 		}
 	}
-	return attachStream(ctx, cancel, h, listen), nil
+	return attachStream(ctx, cancel, h, mValue, early)
 }
 
 // ListenPair advertises a pairing-enabled identity while a separate scanner runs.
@@ -197,6 +212,8 @@ func ListenPair(ctx context.Context, id, name string) (io.ReadWriteCloser, error
 		cancel()
 		return nil, e
 	}
+	mValue := 0
+	var early [][]byte
 	for {
 		m, e := h.next(ctx)
 		if e != nil {
@@ -204,100 +221,137 @@ func ListenPair(ctx context.Context, id, name string) (io.ReadWriteCloser, error
 			h.stop()
 			return nil, e
 		}
+		if m.Event == "packet" {
+			if len(early) >= 16 {
+				cancel()
+				h.stop()
+				return nil, errors.New("too many pre-subscription frames")
+			}
+			early = append(early, m.Data)
+		}
 		if m.Event == "ready" {
+			mValue = m.MaxValue
 			break
 		}
 	}
-	return attachStream(ctx, cancel, h, true), nil
+	return attachStream(ctx, cancel, h, mValue, early)
 }
-func attachStream(ctx context.Context, cancel context.CancelFunc, h *helper, listen bool) *stream {
-	var lastPacket atomic.Int64
-	finish := make(chan struct{})
-	pumpDone := make(chan struct{})
-	s := newStream(ctx, cancel, func() error {
-		if !listen {
-			close(finish)
+
+// Native admissions are local OS queue completions, never remote acknowledgements.
+// Sixteen commands bound pipe/native buffering while allowing radio pipelining.
+func attachStream(ctx context.Context, cancel context.CancelFunc, h *helper, maxValue int, early [][]byte) (*stream, error) {
+	slots := make(chan struct{}, 16)
+	completed := make(chan struct{}, 1)
+	s, e := newStream(ctx, maxValue, func(ctx context.Context, p []byte) error {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return h.send(message{Op: "send", Data: p})
+	}, func() error { cancel(); return h.stop() })
+	if e != nil {
+		cancel()
+		h.stop()
+		return nil, e
+	}
+	s.drain = func(ctx context.Context) error {
+		for len(slots) > 0 {
 			select {
-			case <-pumpDone:
-			case <-time.After(2 * time.Second):
+			case <-completed:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-		cancel()
-		return h.stop()
-	})
+		return nil
+	}
+	receivePacket := func(p []byte) error {
+		s.mu.Lock()
+		if h.cmd.Args[1] == "connect" {
+			s.metrics.Notifications++
+		} else {
+			s.metrics.Writes++
+		}
+		s.mu.Unlock()
+		return s.accept(p)
+	}
+	for _, p := range early {
+		if e = receivePacket(p); e != nil {
+			s.Close()
+			return nil, e
+		}
+	}
+	go func() {
+		defer func() {
+			if os.Getenv("BTFLING_BLE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "BLE stream closed: %+v\n", s.Stats())
+			}
+		}()
+		defer h.stop()
+		for {
+			m, e := h.next(s.ctx)
+			if e != nil {
+				s.fail(e)
+				return
+			}
+			switch m.Event {
+			case "packet":
+				if e = receivePacket(m.Data); e != nil {
+					return
+				}
+			case "sent":
+				s.mu.Lock()
+				if h.cmd.Args[1] == "connect" {
+					s.metrics.Writes++
+				} else {
+					s.metrics.Notifications++
+				}
+				s.mu.Unlock()
+				select {
+				case <-slots:
+					select {
+					case completed <- struct{}{}:
+					default:
+					}
+				default:
+					s.fail(errors.New("unexpected native send completion"))
+					return
+				}
+			case "size":
+				if e = s.setValueSize(m.MaxValue); e != nil {
+					s.fail(e)
+					return
+				}
+			}
+		}
+	}()
+	// A one-second health check is independent of the event-driven data path.
+	// Idle sessions are legal; only unacknowledged data or setup can stall.
 	go func() {
 		tick := time.NewTicker(time.Second)
 		defer tick.Stop()
+		lastProgress := time.Now()
+		var ack uint64
 		for {
 			select {
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				return
 			case <-tick.C:
-				if at := lastPacket.Load(); at != 0 && time.Since(time.Unix(0, at)) > 45*time.Second {
-					s.writer.CloseWithError(errors.New("Bluetooth peer stopped responding for 45 seconds"))
-					cancel()
+				s.mu.Lock()
+				pending := !s.peerOpened || s.sent != s.acked || (s.finRequested && !s.finACK)
+				if !pending || s.acked != ack {
+					lastProgress = time.Now()
+					ack = s.acked
+				}
+				s.mu.Unlock()
+				if time.Since(lastProgress) > 45*time.Second {
+					s.fail(errors.New("Bluetooth stream made no progress for 45 seconds"))
 					return
 				}
 			}
 		}
 	}()
-	go func() {
-		defer cancel()
-		defer close(pumpDone)
-		if listen {
-			if e := h.send(message{Op: "value", Data: s.m.packet()}); e != nil {
-				return
-			}
-			for {
-				m, e := h.next(ctx)
-				if e != nil {
-					s.writer.CloseWithError(e)
-					return
-				}
-				if m.Event == "packet" {
-					lastPacket.Store(time.Now().UnixNano())
-					if e = s.m.accept(m.Data); e != nil {
-						return
-					}
-					if e = h.send(message{Op: "value", Data: s.m.packet()}); e != nil {
-						return
-					}
-				}
-			}
-		}
-		lastPacket.Store(time.Now().UnixNano())
-		ticker := time.NewTicker(5 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			closing := false
-			select {
-			case <-finish:
-				closing = true
-			default:
-			}
-			if e := h.send(message{Op: "exchange", Data: s.m.packet()}); e != nil {
-				return
-			}
-			m, e := h.next(ctx)
-			if e != nil {
-				s.writer.CloseWithError(e)
-				return
-			}
-			lastPacket.Store(time.Now().UnixNano())
-			if m.Event != "packet" || s.m.accept(m.Data) != nil {
-				return
-			}
-			if closing {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return s
+	return s, nil
 }
 
 func validID(id string) bool { b, e := hex.DecodeString(id); return e == nil && len(b) == 16 }

@@ -358,13 +358,64 @@ func transfer(ctx context.Context, c *config.Config, cmd string, args []string, 
 		return e
 	}
 	fmt.Fprintln(errOut, "Connected (encrypted)")
+	started := time.Now()
+	var transferred int64
+	report := func(n int64) {
+		transferred = n
+		if progress != nil {
+			progress(n)
+		}
+	}
 	if listen {
-		e = protocol.Receive(s, out, commit, progress)
+		e = protocol.Receive(s, out, commit, report)
 	} else {
-		e = protocol.Send(s, in, progress)
+		e = protocol.Send(s, in, report)
 	}
 	if e == nil {
-		fmt.Fprintln(errOut, "Transfer complete")
+		e = shutdownSession(conn, s)
+	}
+	if e == nil {
+		elapsed := time.Since(started)
+		fmt.Fprintf(errOut, "Transfer complete: %d bytes in %s (%.1f KiB/s)\n", transferred, elapsed.Round(time.Millisecond), float64(transferred)/1024/elapsed.Seconds())
+		if os.Getenv("BTFLING_BLE_DEBUG") != "" {
+			if stats, ok := conn.(interface{ Stats() ble.Metrics }); ok {
+				fmt.Fprintf(errOut, "BLE: %+v\n", stats.Stats())
+			}
+		}
 	}
 	return e
+}
+
+// shutdownSession completes TLS and transport shutdown after the encrypted
+// application confirmation. In-memory app tests may supply a simpler stream.
+func shutdownSession(conn io.ReadWriteCloser, s *protocol.Session) error {
+	transport, ok := conn.(interface {
+		Shutdown() error
+		SetDeadline(time.Time) error
+	})
+	if !ok {
+		return nil
+	}
+	shutdownDeadline := time.Now().Add(5 * time.Second)
+	if e := transport.SetDeadline(shutdownDeadline); e != nil {
+		return e
+	}
+	if closer, ok := s.ReadWriter.(interface{ CloseWrite() error }); ok {
+		if e := closer.CloseWrite(); e != nil {
+			return e
+		}
+		// crypto/tls expires the underlying write deadline after close_notify.
+		if e := transport.SetDeadline(shutdownDeadline); e != nil {
+			return e
+		}
+	}
+	var tail [1]byte
+	n, e := s.Read(tail[:])
+	if n != 0 || e == nil {
+		return errors.New("unexpected bytes after application completion")
+	}
+	if e != io.EOF {
+		return e
+	}
+	return transport.Shutdown()
 }

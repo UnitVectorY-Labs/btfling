@@ -165,7 +165,12 @@ func Open(ctx context.Context, rw io.ReadWriteCloser, c *config.Config, expected
 			}
 			return nil
 		}}
-	conn := &bluetoothConn{ReadWriteCloser: rw}
+	var conn net.Conn
+	if native, ok := rw.(net.Conn); ok {
+		conn = native
+	} else {
+		conn = &bluetoothConn{ReadWriteCloser: rw}
+	}
 	var secure *tls.Conn
 	if initiator {
 		secure = tls.Client(conn, tc)
@@ -190,17 +195,24 @@ func certificate(seed []byte) (tls.Certificate, error) {
 }
 
 // net.Conn is only an interface adapter for crypto/tls. No socket is created.
-// The Bluetooth operation context owns deadlines and closes the underlying stream.
+// Native BLE streams implement net.Conn themselves. This adapter is for simpler
+// injected streams; it never silently accepts unsupported deadlines.
 type bluetoothConn struct{ io.ReadWriteCloser }
 type address struct{}
 
-func (address) Network() string                         { return "bluetooth" }
-func (address) String() string                          { return "btfling" }
-func (*bluetoothConn) LocalAddr() net.Addr              { return address{} }
-func (*bluetoothConn) RemoteAddr() net.Addr             { return address{} }
-func (*bluetoothConn) SetDeadline(time.Time) error      { return nil }
-func (*bluetoothConn) SetReadDeadline(time.Time) error  { return nil }
-func (*bluetoothConn) SetWriteDeadline(time.Time) error { return nil }
+func (address) Network() string             { return "bluetooth" }
+func (address) String() string              { return "btfling" }
+func (*bluetoothConn) LocalAddr() net.Addr  { return address{} }
+func (*bluetoothConn) RemoteAddr() net.Addr { return address{} }
+func (*bluetoothConn) SetDeadline(time.Time) error {
+	return errors.New("stream does not support deadlines")
+}
+func (*bluetoothConn) SetReadDeadline(time.Time) error {
+	return errors.New("stream does not support deadlines")
+}
+func (*bluetoothConn) SetWriteDeadline(time.Time) error {
+	return errors.New("stream does not support deadlines")
+}
 
 type Progress func(int64)
 

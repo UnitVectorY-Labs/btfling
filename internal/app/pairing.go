@@ -98,6 +98,8 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 			}
 		}
 		if e == nil && (!accept || string(remote) != "ready") {
+			// A buffered transport must deliver the vote before cancelling this session.
+			_ = shutdownSession(conn, s)
 			e = errPairYield
 		}
 		if e != nil {
@@ -211,6 +213,9 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				}
 				if e := confirmSaved(event.session, event.initiator); e != nil {
 					return config.Peer{}, fmt.Errorf("peer saved locally; remote confirmation failed: %w", e)
+				}
+				if e := shutdownSession(event.conn, event.session); e != nil {
+					return config.Peer{}, fmt.Errorf("peer saved locally; session shutdown failed: %w", e)
 				}
 				saved, _ := c.Peer(peerName(c, p.ID))
 				return saved, nil

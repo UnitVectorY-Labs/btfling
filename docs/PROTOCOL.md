@@ -7,87 +7,209 @@ permalink: /protocol
 
 # Protocol and security
 
-btfling uses wire protocol **version 1** with mutually authenticated TLS 1.3 over
-Bluetooth GATT. Physical two-device interoperability has not been verified on
-real adapters.
+This is the canonical, experimental btfling streaming protocol. The protocol
+version remains **1** by design; its previous unreleased definition has been
+replaced completely. The new UUID namespace isolates this definition. There is
+no old-protocol discovery, parsing, negotiation, fallback, or migration.
 
 ## Stack and Bluetooth roles
 
 ```text
 Files / stdin / stdout
-       ↕ bounded transfer records
-Mutually authenticated TLS 1.3
-       ↕ reliable Bluetooth byte stream
-Acknowledged 20-byte GATT mailboxes
-       ↕ BLE ATT read / write
-CoreBluetooth (macOS) / WinRT (Windows)
+          ↕ bounded file records and SHA-256 completion
+Mutually authenticated TLS 1.3 (pinned Ed25519 keys)
+          ↕ net.Conn: ordered, bounded, full-duplex bytes
+Streaming transport: offsets, cumulative ACK, receive limit
+          ↕                                 ↕
+Write Without Response                    Notify
+ central → peripheral               peripheral → central
+          └──────────── BLE GATT ────────────┘
 ```
 
-A transfer uses a central/client sender and a peripheral/server receiver. Pairing
-runs both roles on each device: one native helper advertises a pairing service and
-accepts incoming stream bytes, while another scans and reads nearby identities.
-Selection starts a central connection while the local pairing service remains
-available. Native helper processes communicate with Go through anonymous local
-pipes. **All inter-device traffic travels through Bluetooth GATT.** No TCP/IP,
-Wi-Fi, network relay, or fallback transport exists. A `net.Conn` interface adapter
-is used by TLS without opening a socket.
+A transfer uses a central/client sender and peripheral/server receiver. Each BLE
+connection is full duplex regardless of file direction. Pairing advertises and
+scans concurrently using separate native helpers; selection starts an outgoing
+central connection while the incoming listener remains available. A listener is
+single-session: the first TX subscriber owns it. Writes from other centrals are
+ignored, notifications target the owner, and advertising stops on subscription.
+Restart the helper for a new stream. No reconnect/resume is attempted.
 
-Native implementations are Swift/CoreBluetooth and C#/WinRT. GATT attributes permit
-unpaired access; btfling authenticates the encrypted application session above
-Bluetooth. Pairing requires adapters/drivers capable of peripheral advertising and
-central scanning concurrently.
+Swift/CoreBluetooth and C#/WinRT handle platform BLE mechanics. Go communicates
+with these local child processes using bounded queues over anonymous pipes. The
+local IPC uses JSON lines with base64 packet values; BLE transport frames are
+binary. No TCP/IP, Wi-Fi, socket, relay, or network fallback is involved.
 
-## GATT discovery and stream characteristics
+## Discovery and GATT attributes
 
-Service: `c9e0b001-49f0-4c98-9c83-3ad797a40d10`.
+Service UUID: **`8462b001-8c34-4f19-a9ef-8ac72d7312b6`**.
 
 | Characteristic UUID | Properties | Purpose |
 | --- | --- | --- |
-| `c9e0b002-49f0-4c98-9c83-3ad797a40d10` | Read | Public JSON identity: `id`, `name`, `pairing`. |
-| `c9e0b003-49f0-4c98-9c83-3ad797a40d10` | Write with response | Central request mailbox. |
-| `c9e0b004-49f0-4c98-9c83-3ad797a40d10` | Read | Peripheral response mailbox. |
+| `8462b002-8c34-4f19-a9ef-8ac72d7312b6` | Read | Public identity JSON. |
+| `8462b003-8c34-4f19-a9ef-8ac72d7312b6` | Write Without Response | Central → peripheral stream. |
+| `8462b004-8c34-4f19-a9ef-8ac72d7312b6` | Notify | Peripheral → central stream. |
 
-A `pairing: true` identity indicates active pairing mode. Waiting file receivers
-advertise with pairing false. Discovery briefly connects to read identity metadata.
-Application IDs persist independently of OS Bluetooth addresses. Discovery is not
-authentication: names, IDs, and the pairing indicator can be spoofed.
+The service UUID is advertised. Discovery connects briefly, discovers the
+characteristics and reads identity. Example:
 
-Within one listener process, the first central writing the mailbox owns that stream.
-The design is single-session, not a multi-client file server.
+```json
+{"version":1,"id":"0123456789abcdef0123456789abcdef","name":"office-laptop","pairing":true,"accepting":true}
+```
 
-## Mailbox framing and acknowledgement
+`pairing` distinguishes application pairing from a waiting file receiver;
+`accepting` becomes false once a subscriber owns the listener. Discovery events
+show ID, name and pairing state. A central connecting for a session verifies the
+required characteristic properties and subscribes to TX before starting transport.
+Subscription establishment uses the usual CCCD operation; it is setup, not the
+streaming data path. No stream data is fetched using Read, and no stream frame is
+sent with Write With Response. GATT attributes permit access without OS bonding.
 
-Each ATT value is 8–20 bytes, fitting the mandatory 23-byte ATT MTU:
+**Everything above is public and unauthenticated**, including UUIDs, name,
+application ID, version, accepting/pairing state, and OS Bluetooth addresses.
+Discovery chooses where to attempt a connection; only TLS authenticates a peer.
 
-| Offset | Bytes | Meaning |
+## Binary transport frame
+
+One complete frame occupies one characteristic operation; there is no BLE-level
+length prefix. All integers are unsigned and big-endian.
+
+| Offset | Size | Field |
 | --- | --- | --- |
-| 0 | 4 | Big-endian uint32 data sequence for this direction. |
-| 4 | 4 | Big-endian uint32 last accepted opposite-direction sequence. |
-| 8 | 0–12 | Stream fragment; absent for a poll/acknowledgement only. |
+| 0 | 1 | Protocol version, `1`. |
+| 1 | 1 | Flags: OPEN `0x01`, FIN `0x02`, FIN_ACK `0x04`. |
+| 2 | 2 | Reserved, must be zero. |
+| 4 | 8 | Nonzero random sender session identifier. |
+| 12 | 8 | Offset of this frame's first payload byte in sender's direction. |
+| 20 | 8 | ACK: exclusive contiguous byte offset received in opposite direction. |
+| 28 | 8 | LIMIT: exclusive opposite-direction offset permitted by receiver. |
+| 36 | 0–476 | Stream payload; maximum depends on platform value size. |
 
-Sequences start at zero; the first data fragment is sequence 1. Writers retain one
-fragment until acknowledged, then advance. The most recent duplicate fragment is
-not delivered twice. An invalid packet length, unexpected nonduplicate data
-sequence, or acknowledgement beyond the sent sequence fails the stream.
+Offsets and ACKs start at zero and count bytes, excluding headers. Byte offsets
+allow variable payload lengths without packet-size assumptions or packet history.
+The stream refuses offset exhaustion before uint64 wrapping. The randomly generated
+64-bit sender identifier changes for each local stream and is fixed for its
+lifetime. It rejects stale frames after session establishment; it is not an
+authentication token. TLS supplies cryptographic integrity, replay resistance and
+authenticity.
 
-The central writes its request with ATT write-with-response, then reads the response
-without caching. The peripheral forwards the request to Go, which updates its
-response value. A read may see the previous value while an update is in flight;
-stop-and-wait repetition handles that race. The central uses a 5ms ticker, but radio
-and ATT latency usually determine a slower effective rate. No notifications or
-larger MTU are needed. These are reliability measures, not cryptographic defenses.
+Each direction sends OPEN first: flags exactly `0x01`, offset=ACK=0, no payload,
+and `0 < LIMIT <= 65536`. The implementation advertises 65536. A peer cannot send
+data until it has received OPEN. An identical duplicate OPEN is ignored; a changed
+session identifier or changed OPEN limit fails the connection. Subsequent frames
+contain any combination of FIN/FIN_ACK, or flags=0. FIN can share the final data
+frame. FIN_ACK acknowledges FIN receipt, with ACK equal to the entire opposite
+stream length. Neither FIN nor FIN_ACK consumes an offset.
 
-A 64-fragment inbound queue bounds memory and withholds acknowledgements when full.
-Application records are also bounded. Sequences never wrap: at most `2^32 - 1`
-fragments per direction give an upper bound just under 48 GiB of stream content
-when every fragment is full. TLS/record overhead and short writes reduce the maximum
-actual file size. This is a conservative transport, not a high-throughput design.
+Data must start at the next expected offset and fit the advertised receive limit.
+A fully duplicated range is discarded without delivery or retraction of newer
+ACK/credit state. Partial overlaps, gaps, stale session IDs, data after FIN,
+malformed headers, unknown flags, nonzero reserved fields, and impossible FIN_ACK
+fail the connection. Duplicate old control updates are ignored when their offset,
+ACK and limit are all behind accepted state. Repeated FIN at the already known end
+is harmless. Otherwise cumulative ACK and LIMIT must not decrease; ACK must not
+exceed bytes submitted; LIMIT must be at least ACK and at most ACK+65536. Rejecting
+violations stops both directions and unblocks readers/writers with an error.
 
-Before packet activity, a listener waits until its overall context expires. Once
-packet exchange starts, 45 seconds without activity cancels a stalled stream; the
-central starts its timer when ready. This is not a payload inactivity deadline.
-Central close attempts a final acknowledgement exchange with a two-second grace
-period. No automatic reconnection or resume is implemented.
+## Payload sizing and native backpressure
+
+Every frame fits the current platform value limit and the 512-byte GATT attribute
+bound. Application fragment capacity is `min(platform_limit, 512) - 36`, not a
+fixed MTU. For example, a platform limit of 244 yields 208 stream bytes. Setup
+requires a value limit of at least **37 bytes**; small-MTU-only links fail clearly
+rather than operating through a legacy mode. Windows allows ten seconds for size
+negotiation after subscription. Safe size increases apply to subsequent frames;
+if an already queued frame no longer fits a shrunken native limit, fail rather
+than allow truncation. An unsafe size change also fails the stream.
+
+macOS central uses `maximumWriteValueLength(for: .withoutResponse)`. It only calls
+`writeValue(..., type: .withoutResponse)` when `canSendWriteWithoutResponse` is true,
+resuming on `peripheralIsReady(toSendWriteWithoutResponse:)`. The peripheral uses
+the subscribed `CBCentral.maximumUpdateValueLength`; `updateValue` returning false
+retains the frame and waits for `peripheralManagerIsReady(toUpdateSubscribers:)`.
+It targets just the owning central. Native size limits are rechecked at submission.
+See [Apple write readiness](https://developer.apple.com/documentation/corebluetooth/cbperipheral/cansendwritewithoutresponse)
+and [notification readiness](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanagerdelegate/peripheralmanagerisready(toupdatesubscribers:)).
+
+Windows central uses `GattSession.MaxPduSize - 3`, capped at 512, and listens for
+`MaxPduSizeChanged`. It awaits `WriteValueAsync(..., WriteWithoutResponse)` before
+starting the next native operation. The peripheral uses the owning
+`GattSubscribedClient.MaxNotificationSize`, observes size changes, and awaits
+targeted `NotifyValueAsync(value, subscriber)`, checking the result. These are local
+OS queue/admission completions, **not remote application ACKs or indications**.
+There is no portable CoreBluetooth-style WinRT readiness property; bounded awaited
+operations avoid unbounded outstanding WinRT tasks. Whether a driver completes
+these operations promptly enough to sustain many radio packets is a hardware
+validation requirement. See [Microsoft PDU size](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattsession.maxpdusize)
+and [GATT server notifications](https://learn.microsoft.com/en-us/windows/uwp/devices-sensors/gatt-server).
+
+Go admits at most sixteen outstanding native send commands. CoreBluetooth may
+submit several immediately, then pause on its native readiness signal. Windows
+processes the commands serially while awaiting OS completion. Both allow multiple
+frames in flight over the radio without waiting for peer transport ACKs. Local
+IPC and native callback queues are bounded; no lock is held across Bluetooth calls.
+
+## Receiver-driven flow control and reliability
+
+Each endpoint has a 64 KiB receive ring and a 64 KiB transmit ring. The receiver
+tracks `received` and `consumed`; it advertises `ACK=received` and
+`LIMIT=consumed+65536`. The sender may submit up to `LIMIT-sent` more bytes. ACK
+acknowledges buffering, not application consumption; it does **not** replenish
+credit. Only advancing LIMIT does. Absolute limits avoid double-counting repeated
+credit advertisements. A sender cannot force the receiver to allocate storage
+beyond its ring. A blocked writer eventually fills its own ring, then sleeps until
+credit or cancellation; partial writes report bytes already accepted on error.
+
+ACKs and credits piggyback on outgoing data. Standalone updates batch at 16 KiB of
+new receipt or consumed capacity; FIN forces an immediate update. A one-shot
+10 ms delayed update guarantees progress for smaller batches and `Flush`, even if
+the application stops reading. It is not a polling loop or a per-fragment send
+delay. ACK-only frames do not solicit ACK-only replies.
+
+```text
+Central                            Peripheral (64 KiB receive window)
+  OPEN, limit=65536  ────────────────►
+                      ◄───────────── OPEN, limit=65536
+  DATA off=0,    208B ───────────────►
+  DATA off=208,  208B ───────────────►
+  DATA off=416,  208B ───────────────►
+  DATA off=624,  208B ───────────────►
+       ... many more frames ...
+                      ◄───────────── cumulative ACK=16640, limit=65536
+                                     application consumes 16384 bytes
+                      ◄───────────── ACK=16640, limit=81920
+  DATA continues within new limit ──►
+```
+
+No frame is retained for retransmission, and ACK does not gate every fragment.
+ATT Write Commands and notifications ride BLE's ordered reliable link. The chosen
+APIs preserve ordered submissions on this single stream/bearer; local failure,
+disconnect, or a detected application-boundary gap aborts the stream. If a platform
+drops a final frame silently, outstanding-data timeout fails the session. Reconnect
+requires a fresh hello and TLS handshake. Adding replay buffers would obscure
+native failures and duplicate link reliability without evidence it is needed.
+
+## Connection and transfer flow
+
+```text
+Central / initiator                      Peripheral / listener
+ discover service, read public identity ──►
+ subscribe TX notifications ───────────────► claim single subscriber
+                 ◄──── OPEN / OPEN ──────►
+ public length-prefixed hello ────────────► validate operation and version
+                 ◄──────────────────────── public hello
+                 ◄── TLS 1.3 handshake ───► prove pinned Ed25519 keys
+ TLS data records pipelined ──────────────► stream to temporary file + SHA-256
+ TLS END(count,digest) ───────────────────► verify, commit destination
+                 ◄──────────────────────── TLS CONFIRM(count,digest)
+                 ◄── TLS close_notify ────►
+                 ◄── FIN / FIN_ACK ───────►
+ stop local helper / release GATT
+```
+
+Both directions remain active throughout; TLS never sees BLE frames, credits,
+notifications, or MTU sizes. The Go transport implements `net.Conn` directly,
+including functional read/write deadlines. Other in-memory test transports may
+use an interface adapter; unsupported deadlines return an explicit error.
 
 ## Hello and TLS
 
@@ -161,8 +283,10 @@ Conflicting peer aliases require an explicit unique override.
 After agreement and local configuration persistence, endpoints exchange encrypted
 ASCII `saved` records, initiator first. These confirm application-level success,
 not an absolute guarantee about remote storage across crashes. An error can leave
-one side saved without the other; the command reports confirmation failure. Private
-seeds are never transmitted.
+one side saved without the other; the command reports confirmation failure. Pairing sessions finish with the same TLS
+close-notify and transport shutdown exchange as transfers, ensuring buffered votes
+and saved confirmations are delivered before cancellation. Private seeds are never
+transmitted.
 
 ## Transfer records and completion
 
@@ -210,31 +334,82 @@ normal access; Windows depends on ACLs. Compromised backups or local malware can
 expose identity keys. There is no distributed revocation or automatic rotation:
 forget and re-pair affected relationships.
 
-## Physical-device testing
+## Shutdown, errors and timeouts
 
-Hardware-free tests exercise automatic/two-sided pairing, one-sided selection in
-both ID orders, simultaneous selection, learned/overridden names, optional
-fingerprints, changed-key refusal, TLS sessions, binary/empty streams,
-malformed/truncated records, TLS tampering, CLI files/pipelines, destination cleanup,
-mailbox sequencing/backpressure, and a full encrypted minimum-MTU stream. Native
-macOS and Windows adapters compile. The following physical checks remain unrun.
+Application success requires the encrypted completion count/digest record. Raw
+transport EOF, physical disconnection, or TLS close alone never means success.
+After completion, file endpoints exchange TLS `close_notify`, then use transport
+`Shutdown`: drain queued bytes, send FIN, receive FIN_ACK and peer FIN, submit the
+peer's FIN_ACK, and drain outstanding local native admissions before helper exit.
+Go TLS expires its underlying write deadline after `CloseWrite`; btfling restores
+the shutdown deadline before finishing the transport.
 
-For macOS↔Windows, macOS↔macOS, and Windows↔Windows, test both transfer directions:
+`CloseWrite` waits for FIN_ACK and preserves the reverse direction. After FIN,
+Read delivers buffered bytes then EOF. `Close` is immediate local cancellation,
+not a promise to flush; error shutdown tears down the helper and cancels waiters.
+EOF is independent of the file completion record. A protocol violation or native
+failure propagates an error; bytes already buffered may be read before that error.
+TLS still rejects truncated records and missing `close_notify` during normal file
+shutdown. The final OS admission is not an over-the-air delivery receipt; physical
+shutdown races remain part of hardware acceptance testing.
 
-1. Install current command/helpers. Enable Bluetooth, grant permissions, verify
-   peripheral and concurrent-role support, remove prior OS bonding, and disable Wi-Fi.
-2. Open Pair on both devices; confirm both appear, can be selected from either side,
-   and simultaneous selections save a single relationship. Repeat with multiple
-   nearby peers, CLI auto-selection, and explicit IDs.
-3. Check learned names, alias overrides, known-peer badges, optional fingerprint
-   checks, wrong fingerprints, and changed-key refusal.
-4. Test both transfer startup orders, empty/one-byte/random/32 KiB-boundary/large
-   files, pipelines, receiving destinations, checksums, throughput, and memory.
-5. Try unexpected senders, incorrect keys, and malformed handshakes. Confirm
-   authentication failures prevent payload transfer.
-6. Disable/unplug Bluetooth, kill/cancel processes, and use short deadlines. Check
-   native helper cleanup and incomplete destination cleanup.
-7. Test full disks, existing/unwritable paths, unsupported hard links, and final
-   acknowledgement/disconnect races; verify the sender reports commit failures.
-8. Exercise all TUI tabs, file/folder selection, destination naming, progress, resize,
-   cancellation, and restarting operations after switching tabs.
+The operation context bounds setup, TLS, pairing and transfer and closes the
+transport on cancellation. Read/write deadlines wake blocked I/O and may be reset.
+A native health watchdog checks once per second: setup after subscription,
+unacknowledged sent data, and pending FIN fail after 45 seconds without cumulative
+ACK progress. Idle sessions and a peer deliberately holding consumed-byte credits
+are permitted, bounded by the operation context/deadlines. Successful file
+shutdown has a five-second deadline. Discovery has ten-second candidate connection
+bounds; Windows advertisement startup has a twenty-second bound. No per-fragment
+polling, sleeps, automatic reconnection, or file resumption exists.
+
+## Performance and diagnostics
+
+The 64 KiB window is large enough to hide substantial host/connection latency
+without excessive memory. Each stream uses 128 KiB for the two rings, one reusable
+512-byte encoder buffer, and at most sixteen local native commands. The helper
+receive channel has 64 entries, each frame at most 512 decoded bytes; process pipes
+and OS/controller queues add bounded platform buffering. Windows caps deferred
+write callbacks at 64; discovery candidates are capped at 256. Tiny or empty
+control frames do not allocate unbounded application storage. There is one writer
+pump and callbacks never wait for the application to consume bytes.
+
+Hot-path stream payloads copy into/out of rings; the pump reuses its frame buffer
+and retains no ACK history. Broadcast wake channels are allocated only when a
+waiter exists. Local JSON/base64 helper IPC still incurs allocation/encoding costs;
+benchmarks below exclude the helpers and do not measure radio speed.
+
+`Stats()` snapshots negotiated payload, sent/received stream bytes, available send
+window, receive credit, unacknowledged bytes, frames, controls, GATT writes,
+notifications, elapsed time and terminal error. `BTFLING_BLE_DEBUG=1` prints these
+on completion/closure, with no per-packet normal logging. Control counts are
+outgoing; write/notification counts include local submissions and incoming
+callbacks. Sent byte counts mean submitted stream bytes, not radio receipts. Successful transfers
+print file byte count, elapsed time and effective KiB/s including completion and
+shutdown. Stream counts also include hello and TLS overhead; file counts do not.
+
+Run:
+
+```sh
+go test ./...
+go test -race ./...
+go test ./internal/ble -run '^$' -bench . -benchtime=2x -count=1
+go test ./internal/ble -run '^$' -fuzz FuzzFrame -fuzztime=10s
+```
+
+The simulator separates bounded OS admission queues from ordered delivery workers.
+It can constrain characteristic size, add latency and delayed controls, impose
+packets-per-connection-event pacing, duplicate or mutate frames, and disconnect.
+Tests cover frame validation, payload limits, ring fragmentation/wrap, duplex
+ordering, partial reads/writes, cumulative ACKs, exhausted windows, credit releases,
+stale/duplicate/malformed frames, cancellation, native errors, deadlines, half-close,
+TLS handshake, large TLS file/digest verification, TLS shutdown and concurrent close.
+Application/protocol tests additionally cover TOFU, fingerprints, changed-key
+refusal, TLS tampering, bad/truncated checksums and destination commit failures.
+
+See [benchmark results and hardware checklist](design/streaming-results.md) for
+recorded simulation results. **No physical Bluetooth throughput has been measured
+for this implementation.** Tens of KiB/s or better is the engineering target,
+conditional on negotiated value size, connection interval, PHY, controller queues,
+OS driver behavior, helper costs and RF conditions; the simulator is not evidence
+of a particular physical throughput.

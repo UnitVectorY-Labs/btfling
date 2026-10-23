@@ -15,14 +15,24 @@ go vet ./...
 go build ./...
 ```
 
-The generated Go CI workflow builds and tests the Go packages on Linux. It does
-not compile the native helpers or exercise Bluetooth hardware. Build the complete
+The generated Go CI workflow builds and tests the Go packages on Linux. The
+separate `ble-transport.yml` workflow adds a race run and native-helper compilation
+with Go integration tests on macOS and Windows. CI does not exercise Bluetooth
+hardware. Build the complete
 application on macOS or Windows using the [installation guide](INSTALL.md), or
 run `just build-app`. `just build` validates the Go packages only;
 `just build-helper` builds the native helper into `dist/`.
 
-See the [physical-device checklist](PROTOCOL.md#physical-device-testing) for the
-remaining radio and operating-system acceptance tests.
+Run the stream/TLS simulations with:
+
+```sh
+go test ./internal/ble -run '^$' -bench . -benchtime=2x -count=1
+go test ./internal/ble -run '^$' -fuzz FuzzFrame -fuzztime=10s
+```
+
+See the [recorded simulations and physical-device checklist](design/streaming-results.md)
+for results, limitations and remaining radio/OS acceptance tests. Native helper
+metrics are available with `BTFLING_BLE_DEBUG=1`.
 
 ## Repository standards
 

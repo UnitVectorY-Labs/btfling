@@ -82,8 +82,9 @@ go build ./...
 
 Tests include simultaneous mutual pairing, learned names, optional fingerprint
 verification, key pinning, TLS sessions, binary pipelines, destination
-cleanup, TLS tampering, cancellation, and minimum-MTU GATT mailboxes. See the
-[physical-device checklist](docs/PROTOCOL.md#physical-device-testing) for the
+cleanup, TLS tampering, cancellation, pipelined BLE streams, flow control,
+simulated latency, and TLS shutdown. See the
+[physical-device checklist](docs/design/streaming-results.md#hardware-acceptance-unrun) for the
 remaining radio/OS acceptance tests.
 
 ## License
