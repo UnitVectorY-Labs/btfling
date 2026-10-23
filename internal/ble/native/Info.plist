@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.btfling.ble</string>
+<key>CFBundleName</key><string>btfling Bluetooth adapter</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>btfling uses Bluetooth to exchange files directly with nearby devices.</string>
+<key>NSBluetoothPeripheralUsageDescription</key><string>btfling advertises a Bluetooth service to receive files from nearby devices.</string>
+</dict></plist>

@@ -1,0 +1,28 @@
+# Go and native build products
+/btfling
+/btfling-ble
+/dist/
+/bin/
+*.exe
+*.pdb
+*.test
+*.out
+/coverage.txt
+/coverage.html
+/internal/ble/native/bin/
+/internal/ble/native/obj/
+
+# Local identities, keys, and environment settings
+/config.yaml
+/.config/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+/.idea/
+/.vscode/
