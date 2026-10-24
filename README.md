@@ -10,7 +10,7 @@ Internet relays, or cloud storage.
 
 - **Device pairing:** both devices advertise and discover each other. Names are learned automatically.
 - **Encrypted transfers:** mutual TLS 1.3 authenticates saved Ed25519 keys and uses ephemeral X25519 session keys.
-- **Terminal interface:** Client, Pair, and Transfer tabs with device selection, file browsing, and progress.
+- **Terminal interface:** Client, Pair, and Transfer tabs with keyboard and mouse navigation, file browsing, and progress.
 - **Scriptable:** stdin/stdout, explicit files, useful exit codes, and diagnostics on stderr.
 - **Automatic setup:** first run creates a local identity and key under `~/.config/btfling/`.
 

@@ -19,6 +19,7 @@ func TestTUITabsAndPeerNames(t *testing.T) {
 		t.Fatal(e)
 	}
 	m := newTUI(context.Background(), dir, c)
+	t.Cleanup(m.mouse.close)
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "YOUR CLIENT") || !strings.Contains(view, "My laptop") || !strings.Contains(view, "1  Client") {
 		t.Fatal("missing client tab details")
 	}
@@ -48,6 +49,7 @@ func TestTUIRequiresDestination(t *testing.T) {
 	dir := t.TempDir()
 	c, _ := config.Init(dir, "client")
 	m := newTUI(context.Background(), dir, c)
+	t.Cleanup(m.mouse.close)
 	m.tab = 2
 	m.direction = "receive"
 	m.folder = dir
@@ -66,6 +68,7 @@ func TestTUIRequiresDestination(t *testing.T) {
 func TestTUIViewFitsStandardTerminal(t *testing.T) {
 	c, _ := config.Init(t.TempDir(), "client")
 	m := newTUI(context.Background(), "example", c)
+	t.Cleanup(m.mouse.close)
 	for tab := range 3 {
 		m.tab = tab
 		lines := strings.Split(ansi.Strip(m.View()), "\n")

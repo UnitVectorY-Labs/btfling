@@ -69,6 +69,7 @@ type uiDone struct {
 type uiClock time.Time
 
 type tui struct {
+	mouse                                    *mouseLayout
 	scroll                                   int
 	ctx                                      context.Context
 	dir                                      string
@@ -91,12 +92,15 @@ type tui struct {
 	events                                   chan tea.Msg
 }
 
-func peerList() list.Model {
+func peerDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(0)
 	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(orange).BorderForeground(orange)
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(muted).BorderForeground(orange)
-	l := list.New(nil, d, 70, 12)
+	return d
+}
+func peerList() list.Model {
+	l := list.New(nil, peerDelegate(), 70, 12)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -118,7 +122,9 @@ func newTUI(ctx context.Context, dir string, c *config.Config) tui {
 	picker.CurrentDirectory = cwd
 	picker.Styles.Selected = picker.Styles.Selected.Foreground(orange)
 	picker.Styles.Cursor = picker.Styles.Cursor.Foreground(orange)
-	m := tui{ctx: ctx, dir: dir, c: c, width: 88, height: 36, peers: peerList(), saved: peerList(), spinner: spin, picker: picker, input: input, progress: progress.New(progress.WithSolidFill(string(orange)), progress.WithWidth(60)), direction: "send", stage: "peer", online: map[string]sighting{}, events: make(chan tea.Msg, 128), status: "Ready • all transfers are encrypted"}
+	m := tui{mouse: newMouseLayout(), ctx: ctx, dir: dir, c: c, width: 88, height: 36, peers: peerList(), saved: peerList(), spinner: spin, picker: picker, input: input, progress: progress.New(progress.WithSolidFill(string(orange)), progress.WithWidth(60)), direction: "send", stage: "peer", online: map[string]sighting{}, events: make(chan tea.Msg, 128), status: "Ready • all transfers are encrypted"}
+	m.peers.SetDelegate(mouseDelegate{peerDelegate(), m.mouse.body})
+	m.saved.SetDelegate(mouseDelegate{peerDelegate(), m.mouse.body})
 	m.refreshLists()
 	m.resize()
 	return m
@@ -128,7 +134,9 @@ func runTUI(ctx context.Context, dir string, in io.Reader, out io.Writer) error 
 	if e != nil {
 		return e
 	}
-	_, e = tea.NewProgram(newTUI(ctx, dir, c), tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen()).Run()
+	m := newTUI(ctx, dir, c)
+	defer m.mouse.close()
+	_, e = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return e
 }
 func (m tui) wait() tea.Cmd {
@@ -265,6 +273,7 @@ func (m *tui) resize() {
 }
 func (m *tui) openForm(name, value string) tea.Cmd {
 	m.form = name
+	m.scroll = 0
 	m.input.SetValue(value)
 	m.input.Focus()
 	return textinput.Blink
@@ -354,6 +363,8 @@ func (m *tui) submitForm() tea.Cmd {
 }
 func (m tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case tea.MouseMsg:
+		return m.updateMouse(v)
 	case tea.WindowSizeMsg:
 		m.width = v.Width
 		m.height = v.Height
@@ -427,10 +438,10 @@ func (m tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch v.String() {
 		case "pgdown":
-			m.scroll += 5
+			m.scroll = min(m.mouse.maxScroll, m.mouse.offset+5)
 			return m, nil
 		case "pgup":
-			m.scroll = max(0, m.scroll-5)
+			m.scroll = max(0, m.mouse.offset-5)
 			return m, nil
 		case "q":
 			m.stop()
@@ -558,15 +569,16 @@ func (m tui) View() string {
 		if i == m.tab {
 			style = style.Foreground(lipgloss.Color("#171719")).Background(orange).Bold(true)
 		}
-		tabs = append(tabs, style.Render(name))
+		tabs = append(tabs, m.mouse.screen.Mark(fmt.Sprintf("tab-%d", i), style.Render(name)))
 	}
+	mark := m.mouse.body.Mark
 	var body strings.Builder
 	if m.form != "" {
-		body.WriteString(accent.Render(m.form) + "\n\n" + m.input.View() + "\n\n" + subtle.Render("Enter save · Esc cancel"))
+		body.WriteString(accent.Render(m.form) + "\n\n" + m.input.View() + "\n\n" + mark("key:enter", subtle.Render("Enter save")) + " · " + mark("key:esc", subtle.Render("Esc cancel")))
 	} else {
 		switch m.tab {
 		case 0:
-			body.WriteString(accent.Render("YOUR CLIENT") + "\n\n" + lipgloss.NewStyle().Bold(true).Render(m.c.Name) + "\n" + subtle.Render(m.c.ID) + "\n\n" + accent.Render("SECURE CONNECTIONS") + "\n" + "Mutual TLS 1.3 · Ed25519 identity · X25519 session keys\n\n" + subtle.Render("Your public-key fingerprint") + "\n" + config.Fingerprint(m.c.PublicKey()) + "\n\n" + fmt.Sprintf("%d paired devices", len(m.c.Peers)) + "\n" + subtle.Render(m.dir) + "\n\n" + "n  Edit client name\nTab  Discover and pair a nearby device")
+			body.WriteString(accent.Render("YOUR CLIENT") + "\n\n" + lipgloss.NewStyle().Bold(true).Render(m.c.Name) + "\n" + subtle.Render(m.c.ID) + "\n\n" + accent.Render("SECURE CONNECTIONS") + "\n" + "Mutual TLS 1.3 · Ed25519 identity · X25519 session keys\n\n" + subtle.Render("Your public-key fingerprint") + "\n" + config.Fingerprint(m.c.PublicKey()) + "\n\n" + fmt.Sprintf("%d paired devices", len(m.c.Peers)) + "\n" + subtle.Render(m.dir) + "\n\n" + mark("key:n", "n  Edit client name") + "\n" + mark("key:tab", "Tab  Discover and pair a nearby device"))
 			if len(m.c.Peers) > 0 {
 				body.WriteString("\n\n" + accent.Render("PAIRED DEVICES"))
 				for _, p := range m.c.Peers {
@@ -592,7 +604,7 @@ func (m tui) View() string {
 			if m.alias != "" {
 				alias = "Save as " + m.alias
 			}
-			body.WriteString("\n" + subtle.Render(trust) + "\n" + subtle.Render(alias) + "\n\nEnter pair selected · p start/stop\na override name · v optional fingerprint")
+			body.WriteString("\n" + subtle.Render(trust) + "\n" + subtle.Render(alias) + "\n\n" + mark("key:enter", "Enter pair selected") + " · " + mark("key:p", "p start/stop") + "\n" + mark("key:a", "a override name") + " · " + mark("key:v", "v optional fingerprint"))
 		case 2:
 			send, receive := "s  Send file", "r  Receive file"
 			if m.direction == "send" {
@@ -600,7 +612,7 @@ func (m tui) View() string {
 			} else {
 				receive = accent.Render("● " + receive)
 			}
-			body.WriteString(accent.Render("TRANSFER") + "\n" + send + "     " + receive + "\n\n")
+			body.WriteString(accent.Render("TRANSFER") + "\n" + mark("key:s", send) + "     " + mark("key:r", receive) + "\n\n")
 			switch m.stage {
 			case "peer":
 				body.WriteString("Choose a paired device\n\n")
@@ -609,13 +621,13 @@ func (m tui) View() string {
 				} else {
 					body.WriteString(m.saved.View())
 				}
-				body.WriteString("\nEnter choose peer · s send · r receive")
+				body.WriteString("\n" + mark("key:enter", "Enter choose peer"))
 			case "file":
 				prompt := "Choose the file to send"
 				if m.direction == "receive" {
 					prompt = "Choose a destination folder"
 				}
-				body.WriteString(prompt + "\n" + subtle.Render(m.picker.CurrentDirectory) + "\n\n" + m.picker.View() + "\n\n↑/↓ choose · → open folder · Enter select · f type path")
+				body.WriteString(prompt + "\n" + subtle.Render(m.picker.CurrentDirectory) + "\n\n" + m.mouse.pickerView(m.picker) + "\n\n↑/↓ choose · " + mark("key:right", "→ open folder") + " · " + mark("key:enter", "Enter select") + "\n" + mark("key:left", "← parent folder") + " · " + mark("key:f", "f type path"))
 			default:
 				body.WriteString("Peer  " + m.selected.Name + "\nFile  " + m.path + "\n\n" + accent.Render("ENCRYPTED · TRUSTED KEY REQUIRED") + "\n\n")
 				if m.active == "transfer" {
@@ -625,18 +637,23 @@ func (m tui) View() string {
 					}
 					body.WriteString(fmt.Sprintf("%s transferred", humanBytes(m.bytes)))
 				} else {
-					body.WriteString("Enter start " + m.direction + " · Backspace choose another peer")
+					body.WriteString(mark("key:enter", "Enter start "+m.direction) + " · " + mark("key:backspace", "Backspace choose another peer"))
 				}
 			}
 		}
 	}
-	footer := subtle.Render("Tab switch tabs · PgUp/PgDn scroll · Esc cancel · q quit")
+	footer := subtle.Render("Tab switch tabs · PgUp/PgDn scroll · ") + m.mouse.screen.Mark("cancel", subtle.Render("Esc cancel")) + " · " + m.mouse.screen.Mark("quit", subtle.Render("q quit")) + "\n" + subtle.Render("Click controls · Wheel navigate/scroll")
 	vp := viewport.New(inner, max(4, m.height-21))
-	vp.SetContent(lipgloss.NewStyle().Width(inner).Render(body.String()))
+	// Scan body zones before clipping; mouse coordinates are translated into this
+	// content space, so partially visible controls remain clickable.
+	vp.SetContent(m.mouse.body.Scan(lipgloss.NewStyle().Width(inner).Render(body.String())))
 	vp.SetYOffset(m.scroll)
-	content := panel.Width(inner).Render(vp.View())
+	m.mouse.offset = vp.YOffset
+	m.mouse.maxScroll = max(0, vp.TotalLineCount()-vp.Height)
+	m.mouse.width, m.mouse.height = inner, vp.Height
+	content := m.mouse.screen.Mark("viewport", panel.Width(inner).Render(vp.View()))
 	status := lipgloss.NewStyle().Foreground(orange).Width(width).Render(m.status)
-	return lipgloss.NewStyle().Padding(1, 3).Render(heading + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, tabs...) + "\n" + content + "\n" + status + "\n" + footer)
+	return m.mouse.screen.Scan(lipgloss.NewStyle().Padding(1, 3).Render(heading + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, tabs...) + "\n" + content + "\n" + status + "\n" + footer))
 }
 func humanBytes(n int64) string {
 	if n < 1024 {

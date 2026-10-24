@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/lrstanley/bubblezone v1.0.0
 	go.yaml.in/yaml/v3 v3.0.5
 )
 

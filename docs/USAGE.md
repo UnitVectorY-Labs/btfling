@@ -131,6 +131,14 @@ The ASCII header and orange tab/selection styling stay visible across operations
 Blue spinners indicate active Bluetooth work. Use Tab/Shift+Tab or 1/2/3 to switch
 tabs, Page Up/Down to scroll, Esc to cancel, and q/Ctrl-C to exit.
 
+In terminals that support mouse reporting, click tabs and action labels to activate
+those controls. Click a device or file row to select it, then click the Enter
+label to continue. In the file browser, click the arrow labels to open a folder or
+return to its parent. The wheel moves the selection when over device/file rows
+and scrolls the panel elsewhere. Save/cancel form labels and the footer's
+cancel/quit labels are clickable; entering names and paths still uses the keyboard.
+Switching tabs by mouse also cancels the current operation.
+
 - **Client:** local name, device ID, encryption details, your fingerprint, and saved
   peer fingerprints. Press n to edit your client name.
 - **Pair:** entering the tab starts advertising and scanning. Nearby devices appear
