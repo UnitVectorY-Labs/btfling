@@ -103,6 +103,11 @@ func TestMouseTabsAndActions(t *testing.T) {
 
 func TestMouseScrolledFormAndResize(t *testing.T) {
 	m := mouseTUI(t)
+	// Long paths wrap on macOS and Windows, and must not shift click targets.
+	m.dir = filepath.Join(t.TempDir(), strings.Repeat("directory", 10))
+	if err := os.MkdirAll(m.dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	m.View()
 	// Client-name action begins below the default viewport. Scroll until visible.
 	msg := mouseTarget(t, m, m.mouse.screen, "viewport", "YOUR CLIENT")
@@ -155,7 +160,10 @@ func TestMousePeerAndFileSelection(t *testing.T) {
 	if m.stage != "file" || cmd == nil {
 		t.Fatal("choose peer did not open picker")
 	}
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), strings.Repeat("directory", 10))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
 			t.Fatal(err)
