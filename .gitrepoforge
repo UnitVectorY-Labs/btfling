@@ -10,6 +10,10 @@ config:
   release_github: false
   versions:
     go: 1.26.0
+  repver:
+    goversion:
+      paths:
+        - .github/workflows/ble-transport.yml
   codecov:
     enabled: false
   docs:
