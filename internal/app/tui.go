@@ -651,7 +651,9 @@ func (m tui) View() string {
 	m.mouse.offset = vp.YOffset
 	m.mouse.maxScroll = max(0, vp.TotalLineCount()-vp.Height)
 	m.mouse.width, m.mouse.height = inner, vp.Height
-	content := m.mouse.screen.Mark("viewport", panel.Width(inner).Render(vp.View()))
+	// Include the panel frame so its content width matches the scanned body.
+	// Otherwise long lines wrap again after scanning and shift mouse targets.
+	content := m.mouse.screen.Mark("viewport", panel.Width(inner+panel.GetHorizontalFrameSize()).Render(vp.View()))
 	status := lipgloss.NewStyle().Foreground(orange).Width(width).Render(m.status)
 	return m.mouse.screen.Scan(lipgloss.NewStyle().Padding(1, 3).Render(heading + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, tabs...) + "\n" + content + "\n" + status + "\n" + footer))
 }
