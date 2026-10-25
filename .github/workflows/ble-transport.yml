@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26.0' # GOVERSION
       - name: Race detector
         run: go test -race ./...
 
@@ -41,7 +41,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26.0' # GOVERSION
       - name: Compile native helper
         run: go run ./internal/buildhelper -out dist
       - name: Test Go integration
