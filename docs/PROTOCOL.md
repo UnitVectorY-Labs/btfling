@@ -266,6 +266,14 @@ starts an outgoing attempt when a user selects one; an incoming selection can al
 complete setup. An explicit target restricts accepted candidates to that ID. The
 remote client name is learned unless a local alias overrides it.
 
+Advertising setup failure does not cancel discovery or an outgoing handshake.
+Discovery failure likewise leaves the listener and any outgoing handshake alive.
+This permits pairing when only one device can advertise: that device listens,
+and the other device discovers and initiates. A local failure of both setup
+roles ends pairing unless an outgoing attempt is already in progress. TLS,
+fingerprint verification, and key-pinning rules are unchanged. This fallback is
+for pairing; the current transfer receiver still needs to advertise.
+
 If both sides initiate simultaneously, the lower application ID's outgoing
 connection wins. Candidate sessions exchange TLS-protected length-prefixed ASCII
 votes, `ready` or `yield`, with the initiator writing first. A listener that already

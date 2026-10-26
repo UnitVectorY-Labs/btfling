@@ -218,3 +218,103 @@ func TestPairingCancellation(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestPairingWithOneRadioRoleUnavailable(t *testing.T) {
+	for _, failedRole := range []string{"alice advertising", "bob advertising", "alice discovery", "bob discovery"} {
+		t.Run(failedRole, func(t *testing.T) {
+			ad, bd, a, b, h := pairFixture(t)
+			ar, br := h.radio(a.ID), h.radio(b.ID)
+			roleFailure := errors.New("radio role unavailable")
+			listenFailure := func(context.Context, string, string) (io.ReadWriteCloser, error) { return nil, roleFailure }
+			scanFailure := func(context.Context, func(ble.Peer)) error { return roleFailure }
+			switch failedRole {
+			case "alice advertising":
+				ar.listen = listenFailure
+				// A device that cannot advertise is genuinely absent from scans.
+				h.peers = []ble.Peer{{ID: b.ID, Name: b.Name, Pairing: true}}
+			case "bob advertising":
+				br.listen = listenFailure
+				h.peers = []ble.Peer{{ID: a.ID, Name: a.Name, Pairing: true}}
+			case "alice discovery":
+				ar.scan = scanFailure
+			case "bob discovery":
+				br.scan = scanFailure
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			results := make(chan pairResult, 2)
+			go func() {
+				p, err := pairWithRadio(ctx, ad, a, pairOptions{AutoSelect: true}, nil, nil, func(string) {}, ar)
+				results <- pairResult{p, err}
+			}()
+			go func() {
+				p, err := pairWithRadio(ctx, bd, b, pairOptions{AutoSelect: true}, nil, nil, func(string) {}, br)
+				results <- pairResult{p, err}
+			}()
+			for range 2 {
+				if result := <-results; result.err != nil {
+					t.Fatal(result.err)
+				}
+			}
+			ac, _ := config.Load(ad)
+			bc, _ := config.Load(bd)
+			if len(ac.Peers) != 1 || len(bc.Peers) != 1 || !bytes.Equal(ac.Peers[0].PublicKey, b.PublicKey()) || !bytes.Equal(bc.Peers[0].PublicKey, a.PublicKey()) {
+				t.Fatal("fallback did not save mutually authenticated peers")
+			}
+		})
+	}
+}
+
+func TestPairingReportsBothFailedRadioRoles(t *testing.T) {
+	ad, _, a, _, _ := pairFixture(t)
+	advertiseError, discoveryError := errors.New("advertising aborted without a reason"), errors.New("scan unavailable")
+	radio := pairingRadio{
+		listen: func(context.Context, string, string) (io.ReadWriteCloser, error) { return nil, advertiseError },
+		scan:   func(context.Context, func(ble.Peer)) error { return discoveryError },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := pairWithRadio(ctx, ad, a, pairOptions{}, nil, nil, func(string) {}, radio)
+	if !errors.Is(err, advertiseError) || !errors.Is(err, discoveryError) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("did not report both failed roles promptly: %v", err)
+	}
+}
+
+func TestPairingManualSelectionWithoutAdvertising(t *testing.T) {
+	ad, bd, a, b, h := pairFixture(t)
+	// Alice represents Windows: not discoverable, but able to select the Mac.
+	h.peers = []ble.Peer{{ID: b.ID, Name: b.Name, Pairing: true}}
+	ar := h.radio(a.ID)
+	ar.listen = func(context.Context, string, string) (io.ReadWriteCloser, error) {
+		return nil, errors.New("advertising aborted without a reason")
+	}
+	selections := make(chan string, 1)
+	fallback := make(chan struct{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results := make(chan pairResult, 2)
+	go func() {
+		p, err := pairWithRadio(ctx, ad, a, pairOptions{}, selections, func(peer ble.Peer) {
+			// Simulate selecting a device after the fallback is shown in the TUI.
+			select {
+			case <-fallback:
+				selections <- peer.ID
+			default:
+			}
+		}, func(text string) {
+			if strings.HasPrefix(text, "Advertising unavailable") {
+				fallback <- struct{}{}
+			}
+		}, ar)
+		results <- pairResult{p, err}
+	}()
+	go func() {
+		p, err := pairWithRadio(ctx, bd, b, pairOptions{}, nil, nil, func(string) {}, h.radio(b.ID))
+		results <- pairResult{p, err}
+	}()
+	for range 2 {
+		if result := <-results; result.err != nil {
+			t.Fatal(result.err)
+		}
+	}
+}

@@ -8,15 +8,21 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/UnitVectorY-Labs/btfling/internal/ble"
 	"github.com/UnitVectorY-Labs/btfling/internal/config"
+	"github.com/UnitVectorY-Labs/btfling/internal/diagnostics"
 	"github.com/UnitVectorY-Labs/btfling/internal/protocol"
 )
 
 type pairOptions struct {
 	Target, Alias, Trust string
 	AutoSelect           bool
+	Operation            string
+	DialDelay            time.Duration
+	AfterPair            func(context.Context, *protocol.Session, io.ReadWriteCloser, bool) error
 }
 type pairingRadio struct {
 	listen func(context.Context, string, string) (io.ReadWriteCloser, error)
@@ -29,12 +35,13 @@ var bluetoothPairing = pairingRadio{ble.ListenPair, func(ctx context.Context, li
 }, ble.Discover}
 
 type pairAttempt struct {
-	session   *protocol.Session
-	conn      io.ReadWriteCloser
-	initiator bool
-	decision  chan bool
-	err       error
-	agreed    bool
+	session      *protocol.Session
+	conn         io.ReadWriteCloser
+	initiator    bool
+	decision     chan bool
+	err          error
+	agreed       bool
+	listenFailed bool
 }
 
 var errPairYield = errors.New("simultaneous pairing: using the other connection")
@@ -44,10 +51,31 @@ func runPairing(ctx context.Context, dir string, c *config.Config, options pairO
 }
 func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pairOptions, selections <-chan string, found func(ble.Peer), status func(string), radio pairingRadio) (config.Peer, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var workers sync.WaitGroup
+	operation := options.Operation
+	if operation == "" {
+		operation = "pair"
+	}
+	listenCtx, stopListening := context.WithCancel(ctx)
+	defer stopListening()
+	scanCtx, stopScanning := context.WithCancel(ctx)
+	defer stopScanning()
+	scanDone := make(chan struct{})
 	events := make(chan pairAttempt, 8)
 	peers := make(chan ble.Peer, 64)
 	scanError := make(chan error, 1)
+	defer func() {
+		cancel()
+		workers.Wait()
+		// A losing candidate can have been queued just as cancellation won.
+		// No worker retains ownership after handing it to this channel.
+		close(events)
+		for event := range events {
+			if event.conn != nil {
+				event.conn.Close()
+			}
+		}
+	}()
 	emit := func(e pairAttempt) {
 		select {
 		case events <- e:
@@ -59,6 +87,7 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 	}
 	// A connection remains owned by its worker until an agreed session is handed back.
 	attempt := func(attemptCtx context.Context, conn io.ReadWriteCloser, initiator bool) {
+		diagnostics.Emit(ctx, "info", "pairing", "handshake.start", fmt.Sprintf("initiator=%t operation=%s", initiator, operation))
 		stop := context.AfterFunc(attemptCtx, func() { conn.Close() })
 		handedOff := false
 		defer func() {
@@ -67,11 +96,12 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				conn.Close()
 			}
 		}()
-		s, e := protocol.Open(attemptCtx, conn, c, nil, initiator, "pair")
+		s, e := protocol.Open(attemptCtx, conn, c, nil, initiator, operation)
 		if e != nil {
 			emit(pairAttempt{initiator: initiator, err: e})
 			return
 		}
+		diagnostics.Emit(ctx, "info", "pairing", "handshake.authenticated", fmt.Sprintf("peer=%s initiator=%t", s.Remote.ID, initiator))
 		decision := make(chan bool, 1)
 		candidate := pairAttempt{session: s, conn: conn, initiator: initiator, decision: decision}
 		emit(candidate)
@@ -112,30 +142,41 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 		emit(candidate)
 	}
 	startListener := func() {
-		go func() {
-			conn, e := radio.listen(ctx, c.ID, c.Name)
+		workers.Go(func() {
+			conn, e := radio.listen(listenCtx, c.ID, c.Name)
 			if e != nil {
-				emit(pairAttempt{err: fmt.Errorf("advertise pairing: %w", e)})
+				emit(pairAttempt{listenFailed: true, err: fmt.Errorf("advertise pairing: %w", e)})
 				return
 			}
-			attempt(ctx, conn, false)
-		}()
+			attempt(listenCtx, conn, false)
+		})
 	}
+	status("Looking for nearby devices • waiting for pairing…")
 	startListener()
-	go func() {
-		scanError <- radio.scan(ctx, func(p ble.Peer) {
+	workers.Go(func() {
+		defer close(scanDone)
+		scanError <- radio.scan(scanCtx, func(p ble.Peer) {
 			if p.ID == c.ID {
 				return
 			}
 			select {
 			case peers <- p:
-			case <-ctx.Done():
+			case <-scanCtx.Done():
 			}
 		})
-	}()
+	})
 	target := options.Target
 	var outgoingCancel context.CancelFunc
 	inboundApproved := false
+	var listenErr, discoveryErr error
+	var dialTimer *time.Timer
+	var dialReady <-chan time.Time
+	var scheduledTarget string
+	defer func() {
+		if dialTimer != nil {
+			dialTimer.Stop()
+		}
+	}()
 	startOutgoing := func(id string) {
 		if outgoingCancel != nil || inboundApproved {
 			return
@@ -144,26 +185,37 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 		child, stop := context.WithCancel(ctx)
 		outgoingCancel = stop
 		status("Connecting to " + id + "…")
-		go func() {
+		workers.Go(func() {
 			conn, e := radio.dial(child, false, id, c.Name)
 			if e != nil {
 				emit(pairAttempt{initiator: true, err: e})
 				return
 			}
 			attempt(child, conn, true)
-		}()
+		})
 	}
 	if target != "" {
 		startOutgoing(target)
 	}
-	status("Bluetooth active • advertising and discovering")
 	for {
 		select {
+		case <-dialReady:
+			dialReady = nil
+			startOutgoing(scheduledTarget)
 		case <-ctx.Done():
-			return config.Peer{}, ctx.Err()
+			return config.Peer{}, errors.Join(ctx.Err(), listenErr, discoveryErr)
 		case e := <-scanError:
-			if e != nil && ctx.Err() == nil {
-				return config.Peer{}, fmt.Errorf("discover pairing peers: %w", e)
+			if ctx.Err() == nil {
+				if e == nil {
+					e = errors.New("Bluetooth discovery stopped")
+				}
+				discoveryErr = fmt.Errorf("discover pairing peers: %w", e)
+				if listenErr != nil && outgoingCancel == nil {
+					return config.Peer{}, errors.Join(listenErr, discoveryErr)
+				}
+				if outgoingCancel == nil {
+					status("Discovery unavailable; select this computer on the other device. " + discoveryErr.Error())
+				}
 			}
 		case id := <-selections:
 			if id != "" {
@@ -174,12 +226,32 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				found(p)
 			}
 			if options.AutoSelect && target == "" && p.Pairing {
-				startOutgoing(p.ID)
+				if options.DialDelay > 0 && c.ID > p.ID {
+					target = p.ID
+					scheduledTarget = p.ID
+					dialTimer = time.NewTimer(options.DialDelay)
+					dialReady = dialTimer.C
+					diagnostics.Emit(ctx, "info", "pairing", "election.wait", fmt.Sprintf("peer=%s has lower ID; waiting %s for its connection before fallback", p.ID, options.DialDelay))
+				} else {
+					diagnostics.Emit(ctx, "info", "pairing", "election.dial", "Local ID has priority; starting outgoing connection")
+					startOutgoing(p.ID)
+				}
 			}
 		case event := <-events:
 			if event.err != nil {
+				diagnostics.Emit(ctx, "warning", "pairing", "attempt.failed", fmt.Sprintf("initiator=%t listener_setup=%t: %v", event.initiator, event.listenFailed, event.err))
 				if ctx.Err() != nil {
 					return config.Peer{}, ctx.Err()
+				}
+				if event.listenFailed {
+					listenErr = event.err
+					if discoveryErr != nil && outgoingCancel == nil {
+						return config.Peer{}, errors.Join(listenErr, discoveryErr)
+					}
+					if outgoingCancel == nil {
+						status("Advertising unavailable; discovery continues. Select the other device on this computer. " + listenErr.Error())
+					}
+					continue
 				}
 				if errors.Is(event.err, errPairYield) {
 					if !event.initiator && !inboundApproved {
@@ -205,6 +277,13 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 					return config.Peer{}, ctx.Err()
 				}
 				defer event.conn.Close()
+				stopOnCancel := context.AfterFunc(ctx, func() { event.conn.Close() })
+				defer stopOnCancel()
+				stopScanning()
+				if event.initiator {
+					stopListening()
+				}
+				diagnostics.Emit(ctx, "info", "pairing", "connection.agreed", fmt.Sprintf("peer=%s initiator=%t; stopping competing discovery/listener work", p.ID, event.initiator))
 				if e := rememberPeer(c, p, options.Alias); e != nil {
 					return config.Peer{}, e
 				}
@@ -213,6 +292,17 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				}
 				if e := confirmSaved(event.session, event.initiator); e != nil {
 					return config.Peer{}, fmt.Errorf("peer saved locally; remote confirmation failed: %w", e)
+				}
+				diagnostics.Emit(ctx, "info", "pairing", "paired", "Both devices confirmed saving the peer key")
+				if options.AfterPair != nil {
+					select {
+					case <-scanDone:
+					case <-ctx.Done():
+						return config.Peer{}, ctx.Err()
+					}
+					if err := options.AfterPair(ctx, event.session, event.conn, event.initiator); err != nil {
+						return config.Peer{}, fmt.Errorf("paired, but diagnostic exchange failed: %w", err)
+					}
 				}
 				if e := shutdownSession(event.conn, event.session); e != nil {
 					return config.Peer{}, fmt.Errorf("peer saved locally; session shutdown failed: %w", e)
@@ -241,6 +331,10 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				}
 				if !event.initiator {
 					inboundApproved = true
+					dialReady = nil
+					if dialTimer != nil {
+						dialTimer.Stop()
+					}
 					target = p.ID
 					if outgoingCancel != nil {
 						outgoingCancel()
@@ -249,6 +343,7 @@ func pairWithRadio(ctx context.Context, dir string, c *config.Config, options pa
 				status("Exchanging keys with " + p.Name + "…")
 			}
 			event.decision <- accept
+			diagnostics.Emit(ctx, "info", "pairing", "election.vote", fmt.Sprintf("peer=%s initiator=%t accept=%t", p.ID, event.initiator, accept))
 		}
 	}
 }

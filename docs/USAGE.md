@@ -67,6 +67,14 @@ connects to the first nearby peer in pairing mode. With an ID, it targets that
 specific peer and rejects a different incoming peer. Use the TUI to browse and
 choose a device while remaining discoverable.
 
+If local advertising fails, pairing keeps discovering instead of cancelling
+both radio roles. Select the other device on the computer whose advertising
+failed. For example, leave the Mac in Pair mode and select it from Windows;
+the Windows CLI `pair` command can also initiate automatically. If discovery
+fails instead, select this computer from the other device. The status shows
+which role is unavailable and the underlying error. If both local roles fail,
+pairing stops with both errors. Use `-timeout 45s` for a bounded attempt.
+
 | Flag | Meaning |
 | --- | --- |
 | `-as NAME` | Override the peer name learned automatically from its hello. |
@@ -88,6 +96,13 @@ different IDs require an alias override.
 receivers advertise; idle installations do not. Scan before a transfer rather than
 during it. Only one application pairing/transfer operation per adapter is supported;
 a pairing operation internally runs both radio roles.
+
+## Diagnostic pairing
+
+For an automatic pairing and bidirectional transport check, run `btfling diagnose`
+on both devices. It writes a local log and imports the other device's diagnostic
+reports after connecting, so the Mac log can contain Windows evidence too. See
+[Pairing diagnostics](DIAGNOSTICS.md) for commands, limits, and report contents.
 
 ## Send, receive, and binary streams
 

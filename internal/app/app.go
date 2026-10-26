@@ -25,6 +25,7 @@ Usage:
   btfling init NAME
   btfling keygen
   btfling pair [ID] [-as NAME] [-trust FINGERPRINT] [-timeout 0]
+  btfling diagnose [-timeout 90s] [-log FILE] [-peer ID] [-trust FINGERPRINT]
   btfling discover [-timeout 10s]
   btfling peers
   btfling rename OLD NEW
@@ -33,8 +34,9 @@ Usage:
   btfling receive NAME [-out FILE] [-timeout 0]
   btfling tui
 
-Pair advertises AND discovers. Run it on both devices; without an ID, the
+Pair tries advertising and discovery. Run it on both devices; without an ID, the
 CLI pairs with the first nearby device in pairing mode. The TUI lets you choose.
+If local advertising fails, discovery continues; select the other device here.
 Peer names are learned automatically; -as overrides the local alias.
 Pairing trusts first-use keys by default. Compare fingerprints out of band,
 or supply -trust FINGERPRINT to verify the remote key before saving it.
@@ -99,7 +101,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return e
 	}
 	switch cmd {
-	case "keygen", "peers", "rename", "forget", "discover", "pair", "send", "receive", "tui":
+	case "keygen", "peers", "rename", "forget", "discover", "pair", "diagnose", "send", "receive", "tui":
 	default:
 		return usage("unknown command " + cmd + "; run btfling help")
 	}
@@ -174,6 +176,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return e
 	case "pair":
 		return pair(ctx, dir, c, args, errOut)
+	case "diagnose":
+		return diagnose(ctx, dir, c, args, out, errOut)
 	case "send", "receive":
 		return transfer(ctx, c, cmd, args, in, out, errOut, nil)
 	case "tui":

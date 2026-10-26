@@ -74,6 +74,24 @@ macOS native compilation cannot run on this Linux host. CI now includes macOS an
 Windows native-helper builds and Go tests, in addition to the Linux race run.
 Those newly added CI jobs have not been executed in this workspace.
 
+## Reported hardware failures (2026-10-26)
+
+A user attempting Mac-to-Windows 11 pairing reported an identity read failure
+on macOS (`CBATTErrorDomain Code=14`, "Unlikely error"), followed on a later build
+by a Windows advertising abort with `BluetoothError.Success`. The Windows adapter
+model and driver version are unknown. Pairing has not been demonstrated on that
+hardware; successful compilation and simulated transfers do not establish radio
+interoperability.
+
+Changes retain Windows event sources, handle identity read offsets, and let
+pairing proceed with one failed advertising/discovery role. Windows now records
+advertising status history and adapter/OS capabilities, handles partial startup,
+and distinguishes intentional stops from aborts. The one-role pairing path is
+covered by mutual TLS tests with both saved keys, including manual selection on
+the non-advertising device. The underlying Windows advertising failure remains
+undiagnosed; the updated path requires hardware verification. Transfer receiving
+still requires working local peripheral advertising.
+
 ## Hardware acceptance (unrun)
 
 For macOS↔Windows, macOS↔macOS and Windows↔Windows, in both sender/receiver roles:

@@ -11,27 +11,32 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/UnitVectorY-Labs/btfling/internal/config"
+	"github.com/UnitVectorY-Labs/btfling/internal/diagnostics"
 )
 
 type Peer struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Pairing bool   `json:"pairing"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Pairing    bool   `json:"pairing"`
+	Diagnostic bool   `json:"diagnostic,omitempty"`
 }
 type message struct {
-	Event    string `json:"event,omitempty"`
-	Op       string `json:"op,omitempty"`
-	Data     []byte `json:"data,omitempty"`
-	Error    string `json:"error,omitempty"`
-	ID       string `json:"id,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Pairing  bool   `json:"pairing,omitempty"`
-	MaxValue int    `json:"max_value,omitempty"`
-	Version  int    `json:"version,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	Event      string `json:"event,omitempty"`
+	Op         string `json:"op,omitempty"`
+	Data       []byte `json:"data,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Pairing    bool   `json:"pairing,omitempty"`
+	MaxValue   int    `json:"max_value,omitempty"`
+	Version    int    `json:"version,omitempty"`
+	Diagnostic bool   `json:"diagnostic,omitempty"`
 }
 type helper struct {
 	cmd      *exec.Cmd
@@ -45,21 +50,33 @@ type helper struct {
 }
 
 func start(ctx context.Context, mode, id, name string) (*helper, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	diagnostics.Emit(ctx, "info", "bluetooth", mode+".start", "Preparing native Bluetooth helper")
 	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return nil, errors.New("Bluetooth is supported on macOS and Windows")
 	}
 	executable, e := os.Executable()
 	if e != nil {
+		diagnostics.Emit(ctx, "error", "bluetooth", mode+".prepare", e.Error())
 		return nil, e
 	}
 	workdir, e := os.Getwd()
 	if e != nil {
 		return nil, e
 	}
-	path, e := resolveHelper(executable, workdir, os.Getenv("BTFLING_BLE_HELPER"), runtime.GOOS)
+	path, cleanup, e := prepareHelperContext(ctx, executable, workdir, os.Getenv("BTFLING_BLE_HELPER"), runtime.GOOS)
 	if e != nil {
+		diagnostics.Emit(ctx, "error", "bluetooth", mode+".prepare", e.Error())
 		return nil, e
 	}
+	started := false
+	defer func() {
+		if !started {
+			cleanup()
+		}
+	}()
 	ctx, helperCancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, path, mode, id, name)
 	in, e := cmd.StdinPipe()
@@ -73,13 +90,39 @@ func start(ctx context.Context, mode, id, name string) (*helper, error) {
 		in.Close()
 		return nil, e
 	}
-	cmd.Stderr = os.Stderr
+	var stderr *diagnostics.LineWriter
+	if diagnostics.FromContext(ctx) != nil {
+		stderr = diagnostics.NewLineWriter(ctx, "native."+mode)
+		cmd.Stderr = stderr
+		for _, env := range os.Environ() {
+			if !strings.HasPrefix(env, "BTFLING_BLE_DEBUG=") {
+				cmd.Env = append(cmd.Env, env)
+			}
+		}
+		cmd.Env = append(cmd.Env, "BTFLING_BLE_DEBUG=1")
+	} else {
+		cmd.Stderr = os.Stderr
+	}
 	h := &helper{cmd: cmd, in: in, events: make(chan message, 64), done: make(chan struct{}), cancel: helperCancel}
 	if e = cmd.Start(); e != nil {
 		helperCancel()
 		return nil, fmt.Errorf("start native Bluetooth adapter %s: %w", path, e)
 	}
+	diagnostics.Emit(ctx, "info", "bluetooth", mode+".started", fmt.Sprintf("Native helper process started (pid=%d)", cmd.Process.Pid))
+	started = true
 	go func() {
+		defer func() {
+			if stderr != nil {
+				stderr.Flush()
+			}
+			if h.err != nil && ctx.Err() == nil {
+				diagnostics.Emit(ctx, "error", "bluetooth", mode+".exit", h.err.Error())
+			} else {
+				diagnostics.Emit(ctx, "info", "bluetooth", mode+".stopped", "Native helper stopped and stderr collected")
+			}
+			cleanup()
+			close(h.done)
+		}()
 		scan := bufio.NewScanner(out)
 		scan.Buffer(make([]byte, 4096), 65536)
 		for scan.Scan() {
@@ -87,6 +130,17 @@ func start(ctx context.Context, mode, id, name string) (*helper, error) {
 			if e := json.Unmarshal(scan.Bytes(), &m); e != nil {
 				h.err = fmt.Errorf("native adapter JSON: %w", e)
 				break
+			}
+			// Packet bytes can include TLS records or identity/key material. Log
+			// setup and errors only, never raw helper JSON or data packets.
+			if m.Event == "diagnostic" && m.Phase == "adapter" {
+				diagnostics.Emit(ctx, "info", "bluetooth", "adapter", mode+": "+m.Error)
+			} else if m.Event != "packet" && m.Event != "sent" {
+				level := "info"
+				if m.Event == "error" {
+					level = "error"
+				}
+				diagnostics.Emit(ctx, level, "bluetooth", mode+"."+m.Event, fmt.Sprintf("id=%s name=%s max_value=%d pairing=%t diagnostic=%t %s", m.ID, m.Name, m.MaxValue, m.Pairing, m.Diagnostic, m.Error))
 			}
 			select {
 			case h.events <- m:
@@ -99,7 +153,6 @@ func start(ctx context.Context, mode, id, name string) (*helper, error) {
 		if e := cmd.Wait(); e != nil && h.err == nil {
 			h.err = e
 		}
-		close(h.done)
 	}()
 	return h, nil
 }
@@ -153,7 +206,17 @@ func (h *helper) stop() error {
 	return nil
 }
 func Discover(ctx context.Context, found func(Peer)) error {
-	h, e := start(ctx, "scan", "", "")
+	return discover(ctx, found, false)
+}
+func DiscoverDiagnostic(ctx context.Context, found func(Peer)) error {
+	return discover(ctx, found, true)
+}
+func discover(ctx context.Context, found func(Peer), diagnostic bool) error {
+	mode := "scan"
+	if diagnostic {
+		mode = "diagnose-" + mode
+	}
+	h, e := start(ctx, mode, "", "")
 	if e != nil {
 		return e
 	}
@@ -163,16 +226,31 @@ func Discover(ctx context.Context, found func(Peer)) error {
 		if e != nil {
 			return e
 		}
-		if m.Event == "peer" && m.Version == WireVersion && validID(m.ID) && config.ValidName(m.Name) {
-			found(Peer{ID: m.ID, Name: m.Name, Pairing: m.Pairing})
+		if p, ok := discoveredPeer(m, diagnostic); ok {
+			found(p)
 		}
 	}
 }
+func discoveredPeer(m message, diagnostic bool) (Peer, bool) {
+	if m.Event != "peer" || m.Version != WireVersion || !validID(m.ID) || !config.ValidName(m.Name) || m.Diagnostic != diagnostic {
+		return Peer{}, false
+	}
+	return Peer{ID: m.ID, Name: m.Name, Pairing: m.Pairing, Diagnostic: m.Diagnostic}, true
+}
 func Open(ctx context.Context, listen bool, id, name string) (io.ReadWriteCloser, error) {
+	return open(ctx, listen, id, name, false)
+}
+func OpenDiagnostic(ctx context.Context, id, name string) (io.ReadWriteCloser, error) {
+	return open(ctx, false, id, name, true)
+}
+func open(ctx context.Context, listen bool, id, name string, diagnostic bool) (io.ReadWriteCloser, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	mode := "connect"
 	if listen {
 		mode = "listen"
+	}
+	if diagnostic {
+		mode = "diagnose-" + mode
 	}
 	h, e := start(ctx, mode, id, name)
 	if e != nil {
@@ -206,8 +284,18 @@ func Open(ctx context.Context, listen bool, id, name string) (io.ReadWriteCloser
 
 // ListenPair advertises a pairing-enabled identity while a separate scanner runs.
 func ListenPair(ctx context.Context, id, name string) (io.ReadWriteCloser, error) {
+	return listenPair(ctx, id, name, false)
+}
+func ListenDiagnostic(ctx context.Context, id, name string) (io.ReadWriteCloser, error) {
+	return listenPair(ctx, id, name, true)
+}
+func listenPair(ctx context.Context, id, name string, diagnostic bool) (io.ReadWriteCloser, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	h, e := start(ctx, "pair-listen", id, name)
+	mode := "pair-listen"
+	if diagnostic {
+		mode = "diagnose-" + mode
+	}
+	h, e := start(ctx, mode, id, name)
 	if e != nil {
 		cancel()
 		return nil, e
@@ -267,7 +355,7 @@ func attachStream(ctx context.Context, cancel context.CancelFunc, h *helper, max
 	}
 	receivePacket := func(p []byte) error {
 		s.mu.Lock()
-		if h.cmd.Args[1] == "connect" {
+		if strings.TrimPrefix(h.cmd.Args[1], "diagnose-") == "connect" {
 			s.metrics.Notifications++
 		} else {
 			s.metrics.Writes++
@@ -301,7 +389,7 @@ func attachStream(ctx context.Context, cancel context.CancelFunc, h *helper, max
 				}
 			case "sent":
 				s.mu.Lock()
-				if h.cmd.Args[1] == "connect" {
+				if strings.TrimPrefix(h.cmd.Args[1], "diagnose-") == "connect" {
 					s.metrics.Writes++
 				} else {
 					s.metrics.Notifications++

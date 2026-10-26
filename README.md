@@ -20,25 +20,35 @@ on real adapters. BLE throughput is limited by the acknowledged GATT transport.
 
 ## Quick Start
 
-Build the Go command and the native helper together. On macOS, install Go 1.26+
-and Xcode Command Line Tools, then from the repository root:
+Build a standalone binary from the repository root. Build tools are needed only
+on the build machine; users copy just the resulting executable.
+
+On macOS, install Go 1.26+ and Xcode Command Line Tools:
 
 ```sh
-go build -o dist/btfling .
-go run ./internal/buildhelper -out dist
-./dist/btfling tui
+go run ./internal/buildstandalone
+./dist/btfling-darwin-arm64 tui
 ```
 
-On Windows, build with Go 1.26+ and a .NET SDK capable of targeting .NET 8:
+The default architecture matches the build machine (`arm64` on Apple Silicon,
+`amd64` on Intel). On Windows, install Go 1.26+ and a .NET SDK capable of targeting
+.NET 8, then build for Windows x64:
 
 ```powershell
-go build -o dist/btfling.exe .
-go run ./internal/buildhelper -out dist
-.\dist\btfling.exe tui
+go run ./internal/buildstandalone -os windows -arch amd64
+.\dist\btfling-windows-amd64.exe tui
 ```
 
-Keep both executables together. The Windows helper is self-contained; end users
-do not need .NET. Generated binaries are excluded from this source repository.
+Both builds embed their native Bluetooth helper. No companion executable, Go,
+.NET installation, or installer is required on the target machine. The helper is
+extracted to a private temporary directory when Bluetooth starts and removed when
+it exits normally. Windows also extracts its bundled .NET runtime. These are
+single-file distributions that extract supporting files at runtime.
+See [Installation](docs/INSTALL.md) for cross-builds and platform requirements.
+Generated binaries are excluded from this source repository.
+
+For development, `go run . tui` automatically builds and caches the current
+native helper when Bluetooth is first used. No separate helper command is needed.
 
 For headless setup, run the same command on both devices:
 
@@ -48,6 +58,9 @@ btfling pair
 
 Both advertise and scan; the CLI selects the first nearby peer in pairing mode.
 Use the Pair tab to choose from a list, or `btfling pair DEVICE_ID` to target one.
+If advertising fails on one computer, discovery continues there: select the
+other computer on that device. For a Windows advertising failure, leave the Mac
+in Pair mode and select the Mac from Windows.
 Pairing uses first-use trust by default. Compare key fingerprints through a trusted
 channel, or supply `-trust FINGERPRINT` to require a known fingerprint before saving.
 Transfers authenticate the saved peer key.
@@ -71,6 +84,7 @@ btfling send bob -in report.pdf
 - [Configuration](docs/CONFIG.md) — identity, keys, peers, and storage
 - [Protocol and Security](docs/PROTOCOL.md) — wire format, trust model, and physical-device testing
 - [Development](docs/DEVELOPMENT.md) — validation, repository standards, and documentation maintenance
+- [Pairing diagnostics](docs/DIAGNOSTICS.md) — run `btfling diagnose` on both devices; receive peer reports in the local log
 
 ## Development
 

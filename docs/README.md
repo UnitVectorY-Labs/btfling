@@ -49,3 +49,4 @@ two-device interoperability has not been verified on real adapters.
 - [Configuration](CONFIG.md) — identities, peer trust, YAML schema, and recovery
 - [Protocol and Security](PROTOCOL.md) — transport details, security limits, and testing
 - [Development](DEVELOPMENT.md) — validation, repository standards, and documentation maintenance
+- [Pairing Diagnostics](DIAGNOSTICS.md) — automatic pairing, bidirectional probes, and peer reports in one log

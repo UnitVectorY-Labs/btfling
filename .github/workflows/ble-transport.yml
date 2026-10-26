@@ -44,5 +44,12 @@ jobs:
           go-version: '1.27.3' # GOVERSION
       - name: Compile native helper
         run: go run ./internal/buildhelper -out dist
+      - name: Build standalone application and verify embedded helper startup
+        run: go run ./internal/buildstandalone
+      - name: Test Windows identity long reads
+        if: runner.os == 'Windows'
+        run: dotnet run --project internal/ble/nativetests/IdentityRead.Tests.csproj
       - name: Test Go integration
+        env:
+          BTFLING_TEST_NATIVE_BUILD: '1'
         run: go test ./...

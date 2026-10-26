@@ -25,7 +25,13 @@ func main() {
 	var cmd *exec.Cmd
 	switch *platform {
 	case "darwin":
-		cmd = exec.Command("swiftc", "-O", "-framework", "CoreBluetooth", "-framework", "Foundation", "internal/ble/native/adapter.swift", "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", "internal/ble/native/Info.plist", "-o", filepath.Join(abs, "btfling-ble"))
+		target := "arm64-apple-macosx12.0"
+		if *arch == "amd64" {
+			target = "x86_64-apple-macosx12.0"
+		} else if *arch != "arm64" {
+			panic("macOS requires amd64 or arm64")
+		}
+		cmd = exec.Command("swiftc", "-O", "-target", target, "-framework", "CoreBluetooth", "-framework", "Foundation", "internal/ble/native/adapter.swift", "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", "internal/ble/native/Info.plist", "-o", filepath.Join(abs, "btfling-ble"))
 	case "windows":
 		rid := "win-x64"
 		if *arch == "arm64" {
@@ -33,7 +39,7 @@ func main() {
 		} else if *arch != "amd64" {
 			panic("Windows requires amd64 or arm64")
 		}
-		cmd = exec.Command("dotnet", "publish", "internal/ble/native/Adapter.csproj", "-c", "Release", "-r", rid, "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", abs)
+		cmd = exec.Command("dotnet", "publish", "internal/ble/native/Adapter.csproj", "-c", "Release", "-r", rid, "--self-contained", "true", "-p:PublishSingleFile=true", "-p:IncludeAllContentForSelfExtract=true", "-p:DebugType=None", "-p:DebugSymbols=false", "-o", abs)
 	default:
 		panic("native Bluetooth backend available for darwin and windows")
 	}
