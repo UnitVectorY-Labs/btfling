@@ -8,8 +8,6 @@ config:
   justfile: true
   status: wip
   release_github: false
-  versions:
-    go: 1.26.0
   repver:
     goversion:
       paths:
