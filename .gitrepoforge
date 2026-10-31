@@ -8,6 +8,7 @@ config:
   justfile: true
   status: wip
   release_github: false
+  osv: sarif
   repver:
     goversion:
       paths:
