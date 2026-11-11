@@ -3,7 +3,8 @@ package ble
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"io"
 	"os/exec"
 	"sync"
@@ -36,10 +37,10 @@ func helperPair(t *testing.T) (*stream, *stream) {
 		go func() {
 			defer wg.Done()
 			defer close(h.done)
-			decoder := json.NewDecoder(r)
+			decoder := jsontext.NewDecoder(r)
 			for {
 				var m message
-				if e := decoder.Decode(&m); e != nil {
+				if e := json.UnmarshalDecode(decoder, &m); e != nil {
 					return
 				}
 				if m.Op != "send" {
@@ -97,3 +98,21 @@ func TestHelperAdmissionTLSAndShutdown(t *testing.T) {
 		t.Fatal("missing native metrics", a.Stats())
 	}
 }
+
+func TestHelperCommandJSONLines(t *testing.T) {
+	var output bytes.Buffer
+	h := &helper{in: writeCloser{&output}}
+	if err := h.send(message{Op: "send", Data: []byte{0, 255}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(message{Op: "close"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "{\"op\":\"send\",\"data\":\"AP8=\"}\n{\"op\":\"close\"}\n"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+type writeCloser struct{ io.Writer }
+
+func (writeCloser) Close() error { return nil }

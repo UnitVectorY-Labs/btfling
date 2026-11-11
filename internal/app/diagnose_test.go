@@ -5,7 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -77,10 +78,10 @@ func TestDiagnoseBothDevicesAndRemoteFailureLogs(t *testing.T) {
 						t.Fatal("private key leaked into diagnostics")
 					}
 				}
-				decoder := json.NewDecoder(bytes.NewReader(data))
+				decoder := jsontext.NewDecoder(bytes.NewReader(data))
 				for {
 					var row map[string]any
-					err := decoder.Decode(&row)
+					err := json.UnmarshalDecode(decoder, &row)
 					if err == io.EOF {
 						break
 					}
@@ -210,6 +211,18 @@ func TestDiagnoseCLIValidation(t *testing.T) {
 		err := Run(context.Background(), append([]string{"--config", ad, "diagnose"}, args...), strings.NewReader(""), io.Discard, io.Discard)
 		if !IsUsage(err) {
 			t.Fatalf("expected usage error for %v: %v", args, err)
+		}
+	}
+}
+
+func TestDiagnosticReportEmptyLists(t *testing.T) {
+	data, err := json.Marshal(diagnosticReport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"recent_events", "problems", "adapter_events"} {
+		if !bytes.Contains(data, []byte(`"`+field+`":[]`)) {
+			t.Errorf("%s is not an empty array in %s", field, data)
 		}
 	}
 }

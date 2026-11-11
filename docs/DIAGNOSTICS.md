@@ -110,3 +110,8 @@ source-helper setup. `-log` selects a filename; existing files are never
 overwritten. `-peer` restricts pairing to a discovered device ID, while `-trust`
 requires its expected public-key fingerprint. As with ordinary pairing, default
 first-use trust does not prove the identity of the person operating the peer.
+
+Diagnostic JSON uses Go's v2 JSON defaults: duplicate object names and invalid
+UTF-8 are rejected, and field names are matched case-sensitively. Empty event
+lists in reports are encoded as `[]` (including when the Go slice is nil),
+rather than `null`. Diagnostic logs remain newline-delimited JSON.
