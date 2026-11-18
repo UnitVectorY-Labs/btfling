@@ -4,7 +4,8 @@ package diagnostics
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"io"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ type Event struct {
 
 type Log struct {
 	mu               sync.Mutex
-	encoder          *json.Encoder
+	encoder          *jsontext.Encoder
 	started          time.Time
 	sequence         uint64
 	recent, problems []Event
@@ -31,7 +32,7 @@ type Log struct {
 	err              error
 }
 
-func New(w io.Writer) *Log { return &Log{encoder: json.NewEncoder(w), started: time.Now()} }
+func New(w io.Writer) *Log { return &Log{encoder: jsontext.NewEncoder(w), started: time.Now()} }
 
 func (l *Log) Record(level, component, phase, message string) {
 	l.mu.Lock()
@@ -72,7 +73,7 @@ func (l *Log) Payload(phase string, value any) {
 
 func (l *Log) write(value any) {
 	if l.err == nil {
-		l.err = l.encoder.Encode(value)
+		l.err = json.MarshalEncode(l.encoder, value)
 	}
 }
 func (l *Log) Err() error { l.mu.Lock(); defer l.mu.Unlock(); return l.err }

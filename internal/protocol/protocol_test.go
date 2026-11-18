@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net"
@@ -262,5 +262,36 @@ func TestRejectUnsupportedProtocolVersion(t *testing.T) {
 	}
 	if err := <-done; err == nil {
 		t.Fatal("accepted unsupported protocol version")
+	}
+}
+
+func TestOpenRejectsAmbiguousHelloJSON(t *testing.T) {
+	remote, local := identities(t)
+	valid, err := json.Marshal(hello{Version: Version, ID: remote.ID, Name: remote.Name, PublicKey: remote.PublicKey(), Operation: "pair"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, input := range map[string][]byte{
+		"duplicate":     bytes.Replace(valid, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1),
+		"invalid UTF-8": bytes.Replace(valid, []byte(`"alice"`), []byte{'"', 0xff, '"'}, 1),
+		"wrong case":    bytes.Replace(valid, []byte(`"version"`), []byte(`"Version"`), 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			x, y := net.Pipe()
+			defer x.Close()
+			defer y.Close()
+			x.SetDeadline(time.Now().Add(time.Second))
+			y.SetDeadline(time.Now().Add(time.Second))
+			done := make(chan error, 1)
+			go func() { _, err := Open(context.Background(), y, local, nil, false, "pair"); done <- err }()
+			if err := WriteFrame(x, input); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err == nil {
+				t.Fatal("accepted ambiguous hello")
+			} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+				t.Fatalf("hello was accepted until timeout: %v", err)
+			}
+		})
 	}
 }

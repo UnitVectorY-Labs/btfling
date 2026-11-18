@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ type Peer struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Pairing    bool   `json:"pairing"`
-	Diagnostic bool   `json:"diagnostic,omitempty"`
+	Diagnostic bool   `json:"diagnostic,omitzero"`
 }
 type message struct {
 	Phase      string `json:"phase,omitempty"`
@@ -33,10 +34,10 @@ type message struct {
 	Error      string `json:"error,omitempty"`
 	ID         string `json:"id,omitempty"`
 	Name       string `json:"name,omitempty"`
-	Pairing    bool   `json:"pairing,omitempty"`
-	MaxValue   int    `json:"max_value,omitempty"`
-	Version    int    `json:"version,omitempty"`
-	Diagnostic bool   `json:"diagnostic,omitempty"`
+	Pairing    bool   `json:"pairing,omitzero"`
+	MaxValue   int    `json:"max_value,omitzero"`
+	Version    int    `json:"version,omitzero"`
+	Diagnostic bool   `json:"diagnostic,omitzero"`
 }
 type helper struct {
 	cmd      *exec.Cmd
@@ -159,7 +160,7 @@ func start(ctx context.Context, mode, id, name string) (*helper, error) {
 func (h *helper) send(m message) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return json.NewEncoder(h.in).Encode(m)
+	return json.MarshalEncode(jsontext.NewEncoder(h.in), m)
 }
 func (h *helper) next(ctx context.Context) (message, error) {
 	if e := ctx.Err(); e != nil {
