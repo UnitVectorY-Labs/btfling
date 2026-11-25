@@ -13,8 +13,6 @@ config:
     goversion:
       paths:
         - .github/workflows/ble-transport.yml
-  codecov:
-    enabled: false
   docs:
     enabled: true
     domain: btfling.unitvectorylabs.com
