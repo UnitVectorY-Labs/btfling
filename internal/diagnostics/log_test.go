@@ -3,7 +3,8 @@ package diagnostics
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"strings"
@@ -41,11 +42,11 @@ func TestConcurrentLogsAndBoundedSnapshot(t *testing.T) {
 			t.Fatal("imported reports recursively echoed")
 		}
 	}
-	decoder := json.NewDecoder(&buffer)
+	decoder := jsontext.NewDecoder(&buffer)
 	var last uint64
 	for {
 		var event Event
-		err := decoder.Decode(&event)
+		err := json.UnmarshalDecode(decoder, &event)
 		if err == io.EOF {
 			break
 		}
